@@ -183,7 +183,7 @@ WinMain(HINSTANCE Instance,
   if (WindowHendle)
   {
     ImGui::CreateContext();
-	  IMGUI_CHECKVERSION();
+    IMGUI_CHECKVERSION();
 
     vk::renderer::vulkan_platform_state VulkanPlatformState = vk::renderer::Win32InitVulkan(WindowHendle, Instance);
 
@@ -268,8 +268,8 @@ WinMain(HINSTANCE Instance,
       if(f_IsInSizeMove) continue;
 
       ImGui_ImplVulkan_NewFrame();
-		  ImGui_ImplWin32_NewFrame();
-		  ImGui::NewFrame();
+      ImGui_ImplWin32_NewFrame();
+      ImGui::NewFrame();
 
       logger::ImGuiDraw();
 

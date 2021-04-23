@@ -17,16 +17,16 @@ struct allocated_image
   VmaAllocation Allocation;
 
   VkImageView DefaultView;
-	int MipLevels;
+  int MipLevels;
 };
 
 struct
 VertexInputDescription
 {
   std::vector<VkVertexInputBindingDescription> Bindings;
-	std::vector<VkVertexInputAttributeDescription> Attributes;
+  std::vector<VkVertexInputAttributeDescription> Attributes;
 
-	VkPipelineVertexInputStateCreateFlags Flags = 0;
+  VkPipelineVertexInputStateCreateFlags Flags = 0;
 };
 
 #include "vk_descriptors.h"

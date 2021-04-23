@@ -19,22 +19,22 @@ constexpr unsigned int FRAME_OVERLAP = 3;
 
 struct DeletionQueue
 {
-	std::deque<std::function<void()>> deletors;
+  std::deque<std::function<void()>> deletors;
 
-	void push_function(std::function<void()>&& function)
+  void push_function(std::function<void()>&& function)
   {
-		deletors.push_back(function);
-	}
+    deletors.push_back(function);
+  }
 
-	void flush()
+  void flush()
   {
-		for (auto it = deletors.rbegin(); it != deletors.rend(); it++)
+    for (auto it = deletors.rbegin(); it != deletors.rend(); it++)
     {
-			(*it)();
-		}
+      (*it)();
+    }
 
-		deletors.clear();
-	}
+    deletors.clear();
+  }
 };
 
 struct
@@ -48,8 +48,8 @@ Material
 struct
 Texture
 {
-	allocated_image Image;
-	VkImageView ImageView;
+  allocated_image Image;
+  VkImageView ImageView;
 };
 
 struct
@@ -71,34 +71,34 @@ RenderObject
 struct
 GPUCameraData
 {
-	glm::mat4 View;
-	glm::mat4 Projection;
-	glm::mat4 Viewproj;
+  glm::mat4 View;
+  glm::mat4 Projection;
+  glm::mat4 Viewproj;
 };
 
 struct
 GPUObjectData
 {
-	glm::mat4 ModelMatrix;
+  glm::mat4 ModelMatrix;
 };
 
 struct
 GPUSceneData
 {
-	glm::vec4 FogColor;
-	glm::vec4 FogDistances;
-	glm::vec4 AmbientColor;
-	glm::vec4 SunlightDirection;
-	glm::vec4 SunlightColor;
+  glm::vec4 FogColor;
+  glm::vec4 FogDistances;
+  glm::vec4 AmbientColor;
+  glm::vec4 SunlightDirection;
+  glm::vec4 SunlightColor;
 };
 
 struct
 FrameData
 {
-	VkSemaphore PresentSemaphore, RenderSemaphore;
-	VkFence RenderFence;	
-	VkCommandPool CommandPool;
-	VkCommandBuffer MainCommandBuffer;
+  VkSemaphore PresentSemaphore, RenderSemaphore;
+  VkFence RenderFence;  
+  VkCommandPool CommandPool;
+  VkCommandBuffer MainCommandBuffer;
 
   allocated_buffer CameraBuffer;
   allocated_buffer ObjectBuffer;
@@ -175,7 +175,7 @@ vulkan_render_state
 
   // Scene
   GPUSceneData SceneParameters;
-	allocated_buffer SceneParameterBuffer;
+  allocated_buffer SceneParameterBuffer;
 
   // Context
   upload_context UploadContext;

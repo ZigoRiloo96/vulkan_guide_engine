@@ -161,10 +161,10 @@ namespace assets
     }
     
     nlohmann::json texture_metadata;
-	  texture_metadata["format"] = "RGBA8";
-	  
-	  texture_metadata["buffer_size"] = Info->Size;
-	  texture_metadata["original_file"] = Info->OriginalFile;
+    texture_metadata["format"] = "RGBA8";
+    
+    texture_metadata["buffer_size"] = Info->Size;
+    texture_metadata["original_file"] = Info->OriginalFile;
     texture_metadata["compression"] = "LZ4";
 
     std::vector<nlohmann::json> page_json;
