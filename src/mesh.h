@@ -57,11 +57,23 @@ Vertex
     }
 };
 
+struct RenderBounds
+{
+	glm::vec3 Origin;
+	f32 Radius;
+	glm::vec3 Extents;
+	bool Valid;
+};
+
 struct
 Mesh
 {
   std::vector<Vertex> Vertices;
-  allocated_buffer VertexBuffer;
+  std::vector<u32> Indices;
+  allocated_buffer<Vertex> VertexBuffer;
+  allocated_buffer<u32> IndexBuffer;
+
+  RenderBounds Bounds;
 
   void
   LoadFromObj(const char* filename)

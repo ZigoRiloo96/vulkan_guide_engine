@@ -11,22 +11,40 @@ namespace vk::renderer
   static VkAllocationCallbacks* g_VkAllocator = NULL;
   global_variable VmaAllocator g_Allocator;
 
-  allocated_buffer
+  allocated_buffer_untyped
   CreateBuffer(u64 allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage, VkMemoryPropertyFlags requiredFlags = 0);
 
   void
   ImmediateSubmit(std::function<void(VkCommandBuffer cmd)>&& function);
+
+  std::string AssetPath(std::string_view path)
+  {
+	  return "data/assets_export/" + std::string(path);
+  }
+
+  std::string ShaderPath(std::string_view path) 
+  {
+  	return "data/shaders/" + std::string(path);
+  }
 }
 
 #include "asset/asset.h"
 #include "asset/texture_asset.h"
 
+#include "vk_shaders.h"
+
+#include "../material_system.h"
+
+#include "vk_scene.h"
+
 #include "vk_textures.h"
+
+#include "vk_scenerender.cpp"
 
 namespace vk::renderer
 {
 
-allocated_buffer
+allocated_buffer_untyped
 CreateBuffer(u64 allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage, VkMemoryPropertyFlags requiredFlags)
 {
   VkBufferCreateInfo bufferInfo = {};
@@ -41,7 +59,7 @@ CreateBuffer(u64 allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage
   vmaallocInfo.usage = memoryUsage;
   vmaallocInfo.requiredFlags = requiredFlags;
 
-  allocated_buffer newBuffer;
+  allocated_buffer_untyped newBuffer;
 
   VK_CHECK(vmaCreateBuffer(g_Allocator, &bufferInfo, &vmaallocInfo,
     &newBuffer.Buffer,
@@ -89,6 +107,52 @@ debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
   }
 
   return VK_FALSE;
+}
+
+struct indirect_batch
+{
+  Mesh* Mesh;
+  Material* Material;
+  u32 First;
+  u32 Count;
+};
+
+std::vector<indirect_batch>
+CompactDraws(RenderObject* objects,
+             int count)
+{
+  std::vector<indirect_batch> draws;
+
+  indirect_batch firstDraw;
+  firstDraw.Mesh = objects[0].Mesh;
+  firstDraw.Material = objects[0].Material;
+  firstDraw.First = 0;
+  firstDraw.Count = 1;
+
+  draws.push_back(firstDraw);
+
+  for(int i = 0; i < count; i++)
+  {
+    bool sameMesh = objects[i].Mesh == draws.back().Mesh;
+    bool sameMaterial = objects[i].Material == draws.back().Material;
+
+    if (sameMesh && sameMaterial)
+    {
+      draws.back().Count++;
+    }
+    else
+    {
+      indirect_batch newDraw;
+      firstDraw.Mesh = objects[i].Mesh;
+      firstDraw.Material = objects[i].Material;
+      firstDraw.First = i;
+      firstDraw.Count = 1;
+
+      draws.push_back(newDraw);
+    }
+  }
+
+  return draws;
 }
 
 internal vulkan_platform_state
@@ -161,7 +225,7 @@ InitSwapchain()
 
   vkb::Swapchain vkbSwapchain = swapchainBuilder
     .use_default_format_selection()
-    .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+    .set_desired_present_mode(VK_PRESENT_MODE_IMMEDIATE_KHR) // VK_PRESENT_MODE_IMMEDIATE_KHR / VK_PRESENT_MODE_FIFO_KHR
     .set_desired_extent(g_PlatformState.WindowExtent.width, g_PlatformState.WindowExtent.height)
     .build()
     .value();
@@ -500,6 +564,7 @@ DrawObjects(VkCommandBuffer cmd, RenderObject* first, u64 count)
   vmaUnmapMemory(g_Allocator, g_RenderState.SceneParameterBuffer.Allocation);
 
   void* objectData;
+
   vmaMapMemory(g_Allocator, currentFrame.ObjectBuffer.Allocation, &objectData);
 
   GPUObjectData* objectSSBO = (GPUObjectData*)objectData;
@@ -515,37 +580,70 @@ DrawObjects(VkCommandBuffer cmd, RenderObject* first, u64 count)
   Mesh* lastMesh = nullptr;
   Material* lastMaterial = nullptr;
 
-  for (u64 i = 0; i < count; i++)
+  std::vector<indirect_batch> draws = CompactDraws(first, (int)count);
+
+  for(indirect_batch& draw : draws)
   {
-    RenderObject& object = first[i];
-
-    if (object.Material != lastMaterial)
+    if (draw.Material != lastMaterial)
     {
-      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.Material->Pipeline);
-      lastMaterial = object.Material;
-      vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.Material->PipelineLayout, 0, 1, &currentFrame.GlobalDescriptor, 0, nullptr);
-      
-      vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.Material->PipelineLayout, 1, 1, &currentFrame.ObjectDescriptor, 0, nullptr);
-
-      if (object.Material->TextureSet != VK_NULL_HANDLE)
+      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.Material->Pipeline);
+      vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.Material->PipelineLayout, 0, 1, &currentFrame.GlobalDescriptor, 0, nullptr);
+      vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.Material->PipelineLayout, 1, 1, &currentFrame.ObjectDescriptor, 0, nullptr);
+      if (draw.Material->TextureSet != VK_NULL_HANDLE)
       {
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.Material->PipelineLayout, 2, 1, &object.Material->TextureSet, 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.Material->PipelineLayout, 2, 1, &draw.Material->TextureSet, 0, nullptr);
       }
+
+      lastMaterial = draw.Material;
     }
 
-    MeshPushConstants constants;
-    constants.RenderMatrix = object.TransformMatrix;
+    //MeshPushConstants constants;
+    //constants.RenderMatrix = draw.TransformMatrix;
+    //vkCmdPushConstants(cmd, draw.Material->PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants), &constants);
 
-    vkCmdPushConstants(cmd, object.Material->PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants), &constants);
-
-    if (object.Mesh != lastMesh)
+    if (draw.Mesh != lastMesh)
     {
       VkDeviceSize offset = 0;
-      vkCmdBindVertexBuffers(cmd, 0, 1, &object.Mesh->VertexBuffer.Buffer, &offset);
-      lastMesh = object.Mesh;
+      vkCmdBindVertexBuffers(cmd, 0, 1, &draw.Mesh->VertexBuffer.Buffer, &offset);
+      lastMesh = draw.Mesh;
     }
-    vkCmdDraw(cmd, (u32)object.Mesh->Vertices.size(), 1, 0, (u32)i);
+
+    for(u32 i = draw.First; i < draw.Count; i++)
+    {
+      vkCmdDraw(cmd, (u32)draw.Mesh->Vertices.size(), 1, 0, (u32)i);
+    }
   }
+
+  // for (u64 i = 0; i < count; i++)
+  // {
+  //   RenderObject& object = first[i];
+
+  //   if (object.Material != lastMaterial)
+  //   {
+  //     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.Material->Pipeline);
+  //     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.Material->PipelineLayout, 0, 1, &currentFrame.GlobalDescriptor, 0, nullptr);
+  //     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.Material->PipelineLayout, 1, 1, &currentFrame.ObjectDescriptor, 0, nullptr);
+  //     if (object.Material->TextureSet != VK_NULL_HANDLE)
+  //     {
+  //       vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.Material->PipelineLayout, 2, 1, &object.Material->TextureSet, 0, nullptr);
+  //     }
+
+  //     lastMaterial = object.Material;
+  //   }
+
+  //   MeshPushConstants constants;
+  //   constants.RenderMatrix = object.TransformMatrix;
+  //   vkCmdPushConstants(cmd, object.Material->PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants), &constants);
+
+  //   if (object.Mesh != lastMesh)
+  //   {
+  //     VkDeviceSize offset = 0;
+  //     vkCmdBindVertexBuffers(cmd, 0, 1, &object.Mesh->VertexBuffer.Buffer, &offset);
+  //     lastMesh = object.Mesh;
+  //   }
+    
+  //   vkCmdDraw(cmd, (u32)object.Mesh->Vertices.size(), 1, 0, (u32)i);
+  // }
 }
 
 void ImmediateSubmit(std::function<void(VkCommandBuffer cmd)>&& function)
@@ -893,7 +991,7 @@ UploadMesh(Mesh& mesh)
   VmaAllocationCreateInfo vmaAllocInfo = {};
   vmaAllocInfo.usage = VMA_MEMORY_USAGE_CPU_ONLY;
 
-  allocated_buffer stagingBuffer;
+  allocated_buffer_untyped stagingBuffer;
 
   VK_CHECK(vmaCreateBuffer(g_Allocator, &stagingBufferInfo, &vmaAllocInfo,
     &stagingBuffer.Buffer,

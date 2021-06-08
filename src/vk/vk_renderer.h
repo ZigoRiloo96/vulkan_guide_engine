@@ -15,7 +15,8 @@
 namespace vk::renderer
 {
 
-constexpr unsigned int FRAME_OVERLAP = 3;
+constexpr unsigned int FRAME_OVERLAP = 1;
+// const int MAX_OBJECTS = 150000;
 
 struct DeletionQueue
 {
@@ -76,20 +77,22 @@ GPUCameraData
   glm::mat4 Viewproj;
 };
 
-struct
-GPUObjectData
+struct GPUObjectData
 {
-  glm::mat4 ModelMatrix;
+	glm::mat4 ModelMatrix;
+	glm::vec4 OriginRad; // bounds
+	glm::vec4 Extents;  // bounds
 };
 
 struct
 GPUSceneData
 {
-  glm::vec4 FogColor;
-  glm::vec4 FogDistances;
-  glm::vec4 AmbientColor;
-  glm::vec4 SunlightDirection;
-  glm::vec4 SunlightColor;
+  glm::vec4 FogColor; // w is for exponent
+	glm::vec4 FogDistances; //x for min, y for max, zw unused.
+	glm::vec4 AmbientColor;
+	glm::vec4 SunlightDirection; //w for sun power
+	glm::vec4 SunlightColor;
+	glm::mat4 SunlightShadowMatrix;
 };
 
 struct
@@ -100,11 +103,66 @@ FrameData
   VkCommandPool CommandPool;
   VkCommandBuffer MainCommandBuffer;
 
-  allocated_buffer CameraBuffer;
-  allocated_buffer ObjectBuffer;
+  allocated_buffer<GPUCameraData> CameraBuffer;
+  allocated_buffer<GPUObjectData> ObjectBuffer;
 
   VkDescriptorSet ObjectDescriptor;
   VkDescriptorSet GlobalDescriptor;
+};
+
+struct /*alignas(16)*/DrawCullData
+{
+	glm::mat4 viewMat;
+	float P00, P11, znear, zfar; // symmetric projection parameters
+	float frustum[4]; // data for left/right/top/bottom frustum planes
+	float lodBase, lodStep; // lod distance i = base * pow(step, i)
+	float pyramidWidth, pyramidHeight; // depth pyramid size in texels
+
+	uint32_t drawCount;
+
+	int cullingEnabled;
+	int lodEnabled;
+	int occlusionEnabled;
+	int distanceCheck;
+	int AABBcheck;
+	float aabbmin_x;
+	float aabbmin_y;
+	float aabbmin_z;
+	float aabbmax_x;
+	float aabbmax_y;
+	float aabbmax_z;	
+};
+
+//struct EngineConfig {
+//	//float drawDistance{5000};
+//	//float shadowBias{ 5.25f };
+//	//float shadowBiasslope{4.75f };
+//	//bool occlusionCullGPU{ true };
+//	//bool frustrumCullCPU{ true };
+//	//bool outputIndirectBufferToFile{false};
+//	//bool freezeCulling{ false };
+//	//bool mouseLook{ true };
+//};
+
+struct DirectionalLight
+{
+	glm::vec3 lightPosition;
+	glm::vec3 lightDirection;
+	glm::vec3 shadowExtent;
+	glm::mat4 get_projection();
+
+	glm::mat4 get_view();
+};
+struct CullParams
+{
+	glm::mat4 viewmat;
+	glm::mat4 projmat;
+	bool occlusionCull;
+	bool frustrumCull;
+	float drawDist;
+	bool aabb;
+	glm::vec3 aabbmin;
+	glm::vec3 aabbmax;
 };
 
 struct vulkan_platform_state
@@ -175,7 +233,7 @@ vulkan_render_state
 
   // Scene
   GPUSceneData SceneParameters;
-  allocated_buffer SceneParameterBuffer;
+  allocated_buffer<vk::renderer::GPUSceneData> SceneParameterBuffer;
 
   // Context
   upload_context UploadContext;

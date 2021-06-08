@@ -1,0 +1,5 @@
+[WARN][Performance] Validation Performance Warning: [ UNASSIGNED-CoreValidation-Shader-OutputNotConsumed ] Object 0: handle = 0x8483000000000025, type = VK_OBJECT_TYPE_SHADER_MODULE; | MessageID = 0x609a13b | vertex shader writes to output location 1.0 which is not consumed by fragment shader
+[WARN][TINYOBJ] Material file [ Intergalactic_Spaceship-(Wavefront).mtl ] not found in a path : 
+Failed to load material file(s). Use default material.
+material [ 'Material' ] not found in .mtl
+

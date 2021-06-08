@@ -10,7 +10,7 @@ namespace vk::util
   
 
   allocated_image
-  upload_image(int TexWidth, int TexHeight, VkFormat ImageFormat, allocated_buffer &StagingBuffer)
+  upload_image(int TexWidth, int TexHeight, VkFormat ImageFormat, allocated_buffer_untyped &StagingBuffer)
   {
     VkExtent3D imageExtent;
     imageExtent.width = static_cast<u32>(TexWidth);
@@ -86,7 +86,7 @@ namespace vk::util
   }
 
   allocated_image
-  upload_image_mipmapped(int TexWidth, int TexHeight, VkFormat ImageFormat, allocated_buffer &StagingBuffer, std::vector<mipmap_info> Mips)
+  upload_image_mipmapped(int TexWidth, int TexHeight, VkFormat ImageFormat, allocated_buffer_untyped &StagingBuffer, std::vector<mipmap_info> Mips)
   {
     VkExtent3D imageExtent;
     imageExtent.width = static_cast<uint32_t>(TexWidth);
@@ -189,7 +189,7 @@ namespace vk::util
 
     VkFormat image_format = VK_FORMAT_R8G8B8A8_UNORM;
 
-    allocated_buffer stagingBuffer = vk::renderer::CreateBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY);
+    allocated_buffer_untyped stagingBuffer = vk::renderer::CreateBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY);
 
     void* data;
     vmaMapMemory(vk::renderer::g_Allocator, stagingBuffer.Allocation, &data);
@@ -227,7 +227,7 @@ namespace vk::util
       Assert(false);
     }
 
-    allocated_buffer stagingBuffer = vk::renderer::CreateBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_UNKNOWN, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+    allocated_buffer_untyped stagingBuffer = vk::renderer::CreateBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_UNKNOWN, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
 
     std::vector<mipmap_info> mips;
 
