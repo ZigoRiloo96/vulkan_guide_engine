@@ -780,8 +780,51 @@ render_scene
 	std::unordered_map<vk::util::material*, handle<vk::util::material>> MaterialConvert;
 	std::unordered_map<Mesh*, handle<draw_mesh>> MeshConvert;
 
-	handle<vk::util::material> GetMaterialHandle(vk::util::material* m);
-	handle<draw_mesh> GetMeshHandle(Mesh* m);
+	handle<vk::util::material> GetMaterialHandle(vk::util::material* m)
+  {
+    handle<vk::util::material> handle;
+    auto it = MaterialConvert.find(m);
+    if (it == MaterialConvert.end())
+    {
+      u32 index = static_cast<u32>(Materials.size());
+      Materials.push_back(m);
+
+      handle.Handle = index;
+      MaterialConvert[m] = handle;
+    }
+    else
+    {
+      handle = (*it).second;
+    }
+    return handle;
+  }
+
+	handle<draw_mesh> GetMeshHandle(Mesh* m)
+  {
+    handle<draw_mesh> handle;
+    auto it = MeshConvert.find(m);
+    if (it == MeshConvert.end())
+    {
+      u32 index = static_cast<u32>(Meshes.size());
+
+      draw_mesh newMesh;
+      newMesh.Original = m;
+      newMesh.FirstIndex = 0;
+      newMesh.FirstVertex = 0;
+      newMesh.VertexCount = static_cast<u32>(m->Vertices.size());
+      newMesh.IndexCount = static_cast<u32>(m->Indices.size());
+
+      Meshes.push_back(newMesh);
+
+      handle.Handle = index;
+      MeshConvert[m] = handle;
+    }
+    else
+    {
+      handle = (*it).second;
+    }
+    return handle;
+  }
 	
 
 	allocated_buffer<Vertex> MergedVertexBuffer;

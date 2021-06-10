@@ -316,7 +316,7 @@ BuildEffect(vk::shader::shader_cache* shaderCache, std::string_view vertexShader
 }
 
 void
-build_default_templates(vk::shader::shader_cache* shaderCache, VkRenderPass renderPass, VkRenderPass shadowPass)
+BuildDefaultTemplates(vk::shader::shader_cache* shaderCache, VkRenderPass renderPass, VkRenderPass shadowPass)
 {
   FillBuilders();
 

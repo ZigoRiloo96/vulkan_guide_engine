@@ -361,4 +361,20 @@ image_barrier(VkImage image, VkAccessFlags srcAccessMask, VkAccessFlags dstAcces
 	return result;
 }
 
+VkPresentInfoKHR
+present_info()
+{
+	VkPresentInfoKHR info = {};
+	info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+	info.pNext = nullptr;
+
+	info.swapchainCount = 0;
+	info.pSwapchains = nullptr;
+	info.pWaitSemaphores = nullptr;
+	info.waitSemaphoreCount = 0;
+	info.pImageIndices = nullptr;
+
+	return info;
+}
+
 }

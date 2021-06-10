@@ -1,11 +1,12 @@
 
 #include "vk_renderer.h"
 
+#define FREEZE_SHADOWS 0
+
 namespace vk::renderer
 {
   global_variable vulkan_platform_state g_PlatformState {};
   global_variable vulkan_render_state g_RenderState {};
-  global_variable pipeline_builder g_PipelineBuilder {};
 
   static VkAllocationCallbacks* g_VkAllocator = NULL;
   global_variable VmaAllocator g_Allocator;
@@ -36,6 +37,62 @@ namespace vk::renderer
   	return "data/shaders/" + std::string(path);
   }
 
+  // void VulkanEngine::refresh_renderbounds(MeshObject *object)
+  // {
+  //   //dont try to update invalid bounds
+  //   if (!object->Mesh->Bounds.Valid)
+  //     return;
+
+  //   RenderBounds originalBounds = object->Mesh->Bounds;
+
+  //   //convert bounds to 8 vertices, and transform those
+  //   std::array<glm::vec3, 8> boundsVerts;
+
+  //   for (int i = 0; i < 8; i++)
+  //   {
+  //     boundsVerts[i] = originalBounds.origin;
+  //   }
+
+  //   boundsVerts[0] += originalBounds.extents * glm::vec3(1, 1, 1);
+  //   boundsVerts[1] += originalBounds.extents * glm::vec3(1, 1, -1);
+  //   boundsVerts[2] += originalBounds.extents * glm::vec3(1, -1, 1);
+  //   boundsVerts[3] += originalBounds.extents * glm::vec3(1, -1, -1);
+  //   boundsVerts[4] += originalBounds.extents * glm::vec3(-1, 1, 1);
+  //   boundsVerts[5] += originalBounds.extents * glm::vec3(-1, 1, -1);
+  //   boundsVerts[6] += originalBounds.extents * glm::vec3(-1, -1, 1);
+  //   boundsVerts[7] += originalBounds.extents * glm::vec3(-1, -1, -1);
+
+  //   //recalc max/min
+  //   glm::vec3 min{std::numeric_limits<float>().max()};
+  //   glm::vec3 max{-std::numeric_limits<float>().max()};
+
+  //   glm::mat4 m = object->transformMatrix;
+
+  //   //transform every vertex, accumulating max/min
+  //   for (int i = 0; i < 8; i++)
+  //   {
+  //     boundsVerts[i] = m * glm::vec4(boundsVerts[i], 1.f);
+
+  //     min = glm::min(boundsVerts[i], min);
+  //     max = glm::max(boundsVerts[i], max);
+  //   }
+
+  //   glm::vec3 extents = (max - min) / 2.f;
+  //   glm::vec3 origin = min + extents;
+
+  //   float max_scale = 0;
+  //   max_scale = std::max(glm::length(glm::vec3(m[0][0], m[0][1], m[0][2])), max_scale);
+  //   max_scale = std::max(glm::length(glm::vec3(m[1][0], m[1][1], m[1][2])), max_scale);
+  //   max_scale = std::max(glm::length(glm::vec3(m[2][0], m[2][1], m[2][2])), max_scale);
+
+  //   float radius = max_scale * originalBounds.radius;
+
+  //   object->bounds.extents = extents;
+  //   object->bounds.origin = origin;
+  //   object->bounds.radius = radius;
+  //   object->bounds.valid = true;
+  // }
+
   template <typename T> T*
   MapBuffer(allocated_buffer<T> &buffer)
   {
@@ -64,6 +121,29 @@ namespace vk::renderer
 
 namespace vk::renderer
 {
+
+global_variable pipeline_builder g_PipelineBuilder {};
+
+void
+ReadyCullData(render_scene::mesh_pass& pass, VkCommandBuffer cmd)
+{
+	//copy from the cleared indirect buffer into the one we will use on rendering. This one happens every frame
+	VkBufferCopy indirectCopy;
+	indirectCopy.dstOffset = 0;
+	indirectCopy.size = pass.Batches.size() * sizeof(gpu_indirect_object);
+	indirectCopy.srcOffset = 0;
+	vkCmdCopyBuffer(cmd, pass.ClearIndirectBuffer.Buffer, pass.DrawIndirectBuffer.Buffer, 1, &indirectCopy);
+
+	{
+		VkBufferMemoryBarrier barrier = vk::init::buffer_barrier(pass.DrawIndirectBuffer.Buffer, g_RenderState.GraphicsQueueFamily);
+
+		barrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+		barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+		g_RenderState.CullReadyBarriers.push_back(barrier);
+		//vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &barrier, 0, nullptr);
+	}
+}
 
 allocated_buffer_untyped
 CreateBuffer(u64 allocSize,
@@ -153,7 +233,7 @@ debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
 struct indirect_batch
 {
   Mesh* Mesh;
-  Material* Material;
+  vk::util::material* Material;
   u32 First;
   u32 Count;
 };
@@ -260,6 +340,32 @@ Win32InitVulkan(HWND WindowWin32,
   return g_PlatformState;
 }
 
+u32
+PreviousPow2(u32 v)
+{
+	u32 r = 1;
+
+	while (r * 2 < v)
+		r *= 2;
+
+	return r;
+}
+
+u32
+GetImageMipLevels(u32 width, u32 height)
+{
+	u32 result = 1;
+
+	while (width > 1 || height > 1)
+	{
+		result++;
+		width /= 2;
+		height /= 2;
+	}
+
+	return result;
+}
+
 internal void
 InitSwapchain()
 {
@@ -282,32 +388,168 @@ InitSwapchain()
     vkDestroySwapchainKHR(g_PlatformState.Device, g_RenderState.Swapchain, nullptr);
   });
 
-  VkExtent3D depthImageExtent =
+  // render image
   {
-    g_PlatformState.WindowExtent.width,
-    g_PlatformState.WindowExtent.height,
-    1
-  };
+    VkExtent3D renderImageExtent =
+    {
+			g_PlatformState.WindowExtent.width,
+      g_PlatformState.WindowExtent.height,
+			1
+		};
 
-  g_RenderState.DepthFormat = VK_FORMAT_D32_SFLOAT;
+		g_RenderState.RenderFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
+		VkImageCreateInfo ri_info = vk::init::image_create_info(g_RenderState.RenderFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT| VK_IMAGE_USAGE_SAMPLED_BIT, renderImageExtent);
 
-  VkImageCreateInfo dimg_info = vk::init::image_create_info(g_RenderState.DepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, depthImageExtent);
+		//for the depth image, we want to allocate it from gpu local memory
+		VmaAllocationCreateInfo dimg_allocinfo = {};
+		dimg_allocinfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+		dimg_allocinfo.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-  VmaAllocationCreateInfo dimg_allocinfo = {};
-  dimg_allocinfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-  dimg_allocinfo.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		//allocate and create the image
+		vmaCreateImage(g_Allocator, &ri_info, &dimg_allocinfo, &g_RenderState.RawRenderImage.Image, &g_RenderState.RawRenderImage.Allocation, nullptr);
 
-  vmaCreateImage(g_Allocator, &dimg_info, &dimg_allocinfo, &g_RenderState.DepthImage.Image, &g_RenderState.DepthImage.Allocation, nullptr);
+		//build a image-view for the depth image to use for rendering
+		VkImageViewCreateInfo dview_info = vk::init::imageview_create_info(g_RenderState.RenderFormat, g_RenderState.RawRenderImage.Image, VK_IMAGE_ASPECT_COLOR_BIT);
 
-  VkImageViewCreateInfo dview_info = vk::init::imageview_create_info(g_RenderState.DepthFormat, g_RenderState.DepthImage.Image, VK_IMAGE_ASPECT_DEPTH_BIT);
+		VK_CHECK(vkCreateImageView(g_PlatformState.Device, &dview_info, nullptr, &g_RenderState.RawRenderImage.DefaultView));
+  }
 
-  VK_CHECK(vkCreateImageView(g_PlatformState.Device, &dview_info, nullptr, &g_RenderState.DepthImageView));
-
-  g_RenderState.MainDeletionQueue.push_function([=]()
+  //depth image size will match the window
+	VkExtent3D depthImageExtent =
   {
-    vkDestroyImageView(g_PlatformState.Device, g_RenderState.DepthImageView, nullptr);
-    vmaDestroyImage(g_Allocator, g_RenderState.DepthImage.Image, g_RenderState.DepthImage.Allocation);
-  });
+		g_PlatformState.WindowExtent.width,
+		g_PlatformState.WindowExtent.height,
+		1
+	};
+
+	VkExtent3D shadowExtent =
+  {
+		g_RenderState.ShadowExtent.width,
+		g_RenderState.ShadowExtent.height,
+		1
+	};
+
+	//hardcoding the depth format to 32 bit float
+	g_RenderState.DepthFormat = VK_FORMAT_D32_SFLOAT;
+
+	//for the depth image, we want to allocate it from gpu local memory
+	VmaAllocationCreateInfo dimg_allocinfo = {};
+	dimg_allocinfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+	dimg_allocinfo.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+  // depth image ------ 
+	{
+		//the depth image will be a image with the format we selected and Depth Attachment usage flag
+		VkImageCreateInfo dimg_info = vk::init::image_create_info(g_RenderState.DepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, depthImageExtent);
+
+
+		//allocate and create the image
+		vmaCreateImage(g_Allocator, &dimg_info, &dimg_allocinfo, &g_RenderState.DepthImage.Image, &g_RenderState.DepthImage.Allocation, nullptr);
+
+
+		//build a image-view for the depth image to use for rendering
+		VkImageViewCreateInfo dview_info = vk::init::imageview_create_info(g_RenderState.DepthFormat, g_RenderState.DepthImage.Image, VK_IMAGE_ASPECT_DEPTH_BIT);;
+
+		VK_CHECK(vkCreateImageView(g_PlatformState.Device, &dview_info, nullptr, &g_RenderState.DepthImage.DefaultView));
+	}
+
+	//shadow image
+	{
+		//the depth image will be a image with the format we selected and Depth Attachment usage flag
+		VkImageCreateInfo dimg_info = vk::init::image_create_info(g_RenderState.DepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, shadowExtent);
+
+		//allocate and create the image
+		vmaCreateImage(g_Allocator, &dimg_info, &dimg_allocinfo, &g_RenderState.ShadowImage.Image, &g_RenderState.ShadowImage.Allocation, nullptr);
+
+		//build a image-view for the depth image to use for rendering
+		VkImageViewCreateInfo dview_info = vk::init::imageview_create_info(g_RenderState.DepthFormat, g_RenderState.ShadowImage.Image, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+		VK_CHECK(vkCreateImageView(g_PlatformState.Device, &dview_info, nullptr, &g_RenderState.ShadowImage.DefaultView));
+	}
+
+  // Note: previousPow2 makes sure all reductions are at most by 2x2 which makes sure they are conservative
+	g_RenderState.DepthPyramidWidth = PreviousPow2(g_PlatformState.WindowExtent.width);
+	g_RenderState.DepthPyramidHeight = PreviousPow2(g_PlatformState.WindowExtent.height);
+	g_RenderState.DepthPyramidLevels = GetImageMipLevels(g_RenderState.DepthPyramidWidth, g_RenderState.DepthPyramidHeight);
+
+	VkExtent3D pyramidExtent =
+  {
+		static_cast<u32>(g_RenderState.DepthPyramidWidth),
+		static_cast<u32>(g_RenderState.DepthPyramidHeight),
+		1
+	};
+
+	//the depth image will be a image with the format we selected and Depth Attachment usage flag
+	VkImageCreateInfo pyramidInfo = vk::init::image_create_info(VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, pyramidExtent);
+
+	pyramidInfo.mipLevels = g_RenderState.DepthPyramidLevels;
+
+	//allocate and create the image
+	vmaCreateImage(g_Allocator, &pyramidInfo, &dimg_allocinfo, &g_RenderState.DepthPyramid.Image, &g_RenderState.DepthPyramid.Allocation, nullptr);
+
+	//build a image-view for the depth image to use for rendering
+	VkImageViewCreateInfo priview_info = vk::init::imageview_create_info(VK_FORMAT_R32_SFLOAT, g_RenderState.DepthPyramid.Image, VK_IMAGE_ASPECT_COLOR_BIT);
+	priview_info.subresourceRange.levelCount = g_RenderState.DepthPyramidLevels;
+
+
+	VK_CHECK(vkCreateImageView(g_PlatformState.Device, &priview_info, nullptr, &g_RenderState.DepthPyramid.DefaultView));
+
+  for (i32 i = 0; i < g_RenderState.DepthPyramidLevels; ++i)
+	{
+		VkImageViewCreateInfo level_info = vk::init::imageview_create_info(VK_FORMAT_R32_SFLOAT, g_RenderState.DepthPyramid.Image, VK_IMAGE_ASPECT_COLOR_BIT);
+		level_info.subresourceRange.levelCount = 1;
+		level_info.subresourceRange.baseMipLevel = i;
+
+		VkImageView pyramid;
+		vkCreateImageView(g_PlatformState.Device, &level_info, nullptr, &pyramid);
+
+		g_RenderState.DepthPyramidMips[i] = pyramid;
+		Assert(g_RenderState.DepthPyramidMips[i]);
+	}
+
+  VkSamplerCreateInfo createInfo = {};
+
+	auto reductionMode = VK_SAMPLER_REDUCTION_MODE_MIN;
+
+	createInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+	createInfo.magFilter = VK_FILTER_LINEAR;
+	createInfo.minFilter = VK_FILTER_LINEAR;
+	createInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+	createInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+	createInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+	createInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+	createInfo.minLod = 0;
+	createInfo.maxLod = 16.f;
+
+	VkSamplerReductionModeCreateInfoEXT createInfoReduction = { VK_STRUCTURE_TYPE_SAMPLER_REDUCTION_MODE_CREATE_INFO_EXT };
+
+	if (reductionMode != VK_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE_EXT)
+	{
+		createInfoReduction.reductionMode = reductionMode;
+
+		createInfo.pNext = &createInfoReduction;
+	}
+
+	VK_CHECK(vkCreateSampler(g_PlatformState.Device, &createInfo, 0, &g_RenderState.DepthSampler));
+
+  VkSamplerCreateInfo samplerInfo = vk::init::sampler_create_info(VK_FILTER_LINEAR);
+	samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+	
+	vkCreateSampler(g_PlatformState.Device, &samplerInfo, nullptr, &g_RenderState.SmoothSampler);
+
+	VkSamplerCreateInfo shadsamplerInfo = vk::init::sampler_create_info(VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER);
+	shadsamplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+	shadsamplerInfo.compareEnable = true;
+	shadsamplerInfo.compareOp = VK_COMPARE_OP_LESS;
+	vkCreateSampler(g_PlatformState.Device, &shadsamplerInfo, nullptr, &g_RenderState.ShadowSampler);
+
+
+	//add to deletion queues
+	g_RenderState.MainDeletionQueue.push_function([=]()
+  {
+		vkDestroyImageView(g_PlatformState.Device, g_RenderState.DepthImage.DefaultView, nullptr);
+		vmaDestroyImage(g_Allocator, g_RenderState.DepthImage.Image, g_RenderState.DepthImage.Allocation);
+	});
 }
 
 internal void
@@ -339,85 +581,269 @@ InitCommands()
   });
 }
 
+// internal void
+// InitDefaultRenderpass()
+// {
+//   VkAttachmentDescription color_attachment = {};
+//   color_attachment.format = g_RenderState.SwapchainImageFormat;
+//   color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+//   color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+//   color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+//   color_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;  
+//   color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+//   color_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+//   color_attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+//   VkAttachmentReference color_attachment_ref = {};
+//   color_attachment_ref.attachment = 0;
+//   color_attachment_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+//   VkAttachmentDescription depth_attachment = {};
+//   depth_attachment.flags = 0;
+//   depth_attachment.format = g_RenderState.DepthFormat;
+//   depth_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+//   depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+//   depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+//   depth_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+//   depth_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+//   depth_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+//   depth_attachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+//   VkAttachmentReference depth_attachment_ref = {};
+//   depth_attachment_ref.attachment = 1;
+//   depth_attachment_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+//   VkSubpassDescription subpass = {};
+//   subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+//   subpass.colorAttachmentCount = 1;
+//   subpass.pColorAttachments = &color_attachment_ref;
+//   subpass.pDepthStencilAttachment = &depth_attachment_ref;
+
+//   VkAttachmentDescription attachments[2] = { color_attachment, depth_attachment };
+
+//   VkRenderPassCreateInfo render_pass_info = {};
+//   render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+//   render_pass_info.attachmentCount = 2;
+//   render_pass_info.pAttachments = &attachments[0];
+//   render_pass_info.subpassCount = 1;
+//   render_pass_info.pSubpasses = &subpass;
+  
+//   VK_CHECK(vkCreateRenderPass(g_PlatformState.Device, &render_pass_info, nullptr, &g_RenderState.RenderPass));
+
+//   g_RenderState.MainDeletionQueue.push_function([=]()
+//   {
+//     vkDestroyRenderPass(g_PlatformState.Device, g_RenderState.RenderPass, nullptr);
+//   });
+// }
+
 internal void
-InitDefaultRenderpass()
+InitForwardRenderpass()
 {
   VkAttachmentDescription color_attachment = {};
-  color_attachment.format = g_RenderState.SwapchainImageFormat;
-  color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-  color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-  color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-  color_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;  
-  color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-  color_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-  color_attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+	color_attachment.format = g_RenderState.SwapchainImageFormat;// _renderFormat;//_swachainImageFormat;
+	color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+	color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	color_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	color_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	color_attachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;//PRESENT_SRC_KHR;
 
-  VkAttachmentReference color_attachment_ref = {};
-  color_attachment_ref.attachment = 0;
-  color_attachment_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	VkAttachmentReference color_attachment_ref = {};
+	color_attachment_ref.attachment = 0;
+	color_attachment_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-  VkAttachmentDescription depth_attachment = {};
-  depth_attachment.flags = 0;
-  depth_attachment.format = g_RenderState.DepthFormat;
-  depth_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-  depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-  depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-  depth_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-  depth_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-  depth_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-  depth_attachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+	VkAttachmentDescription depth_attachment = {};
+	// Depth attachment
+	depth_attachment.flags = 0;
+	depth_attachment.format = g_RenderState.DepthFormat;
+	depth_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+	depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	depth_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	depth_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	depth_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	depth_attachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
-  VkAttachmentReference depth_attachment_ref = {};
-  depth_attachment_ref.attachment = 1;
-  depth_attachment_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+	VkAttachmentReference depth_attachment_ref = {};
+	depth_attachment_ref.attachment = 1;
+	depth_attachment_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
-  VkSubpassDescription subpass = {};
-  subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-  subpass.colorAttachmentCount = 1;
-  subpass.pColorAttachments = &color_attachment_ref;
-  subpass.pDepthStencilAttachment = &depth_attachment_ref;
+	//we are going to create 1 subpass, which is the minimum you can do
+	VkSubpassDescription subpass = {};
+	subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+	subpass.colorAttachmentCount = 1;
+	subpass.pColorAttachments = &color_attachment_ref;
+	//hook the depth attachment into the subpass
+	subpass.pDepthStencilAttachment = &depth_attachment_ref;
 
-  VkAttachmentDescription attachments[2] = { color_attachment, depth_attachment };
+	//1 dependency, which is from "outside" into the subpass. And we can read or write color
+	VkSubpassDependency dependency = {};
+	dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+	dependency.dstSubpass = 0;
+	dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency.srcAccessMask = 0;
+	dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
-  VkRenderPassCreateInfo render_pass_info = {};
-  render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-  render_pass_info.attachmentCount = 2;
-  render_pass_info.pAttachments = &attachments[0];
-  render_pass_info.subpassCount = 1;
-  render_pass_info.pSubpasses = &subpass;
-  
+
+	//array of 2 attachments, one for the color, and other for depth
+	VkAttachmentDescription attachments[2] = { color_attachment, depth_attachment };
+
+	VkRenderPassCreateInfo render_pass_info = {};
+	render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+	//2 attachments from said array
+	render_pass_info.attachmentCount = 2;
+	render_pass_info.pAttachments = &attachments[0];
+	render_pass_info.subpassCount = 1;
+	render_pass_info.pSubpasses = &subpass;
+	//render_pass_info.dependencyCount = 1;
+	//render_pass_info.pDependencies = &dependency;
+
   VK_CHECK(vkCreateRenderPass(g_PlatformState.Device, &render_pass_info, nullptr, &g_RenderState.RenderPass));
+
+	g_RenderState.MainDeletionQueue.push_function([=]()
+  {
+    vkDestroyRenderPass(g_PlatformState.Device, g_RenderState.RenderPass, nullptr);
+	});
+}
+
+internal void
+InitCopyRenderpass()
+{
+  VkAttachmentDescription color_attachment = {};
+	color_attachment.format = g_RenderState.SwapchainImageFormat;
+	color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+	color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	color_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	color_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	color_attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+	VkAttachmentReference color_attachment_ref = {};
+	color_attachment_ref.attachment = 0;
+	color_attachment_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+	//we are going to create 1 subpass, which is the minimum you can do
+	VkSubpassDescription subpass = {};
+	subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+	subpass.colorAttachmentCount = 1;
+	subpass.pColorAttachments = &color_attachment_ref;	
+
+	//1 dependency, which is from "outside" into the subpass. And we can read or write color
+	VkSubpassDependency dependency = {};
+	dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+	dependency.dstSubpass = 0;
+	dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency.srcAccessMask = 0;
+	dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+
+	VkRenderPassCreateInfo render_pass_info = {};
+	render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+	//2 attachments from said array
+	render_pass_info.attachmentCount = 1;
+	render_pass_info.pAttachments = &color_attachment;
+	render_pass_info.subpassCount = 1;
+	render_pass_info.pSubpasses = &subpass;
+	//render_pass_info.dependencyCount = 1;
+	//render_pass_info.pDependencies = &dependency;
+
+  VK_CHECK(vkCreateRenderPass(g_PlatformState.Device, &render_pass_info, nullptr, &g_RenderState.CopyPass));
 
   g_RenderState.MainDeletionQueue.push_function([=]()
   {
-    vkDestroyRenderPass(g_PlatformState.Device, g_RenderState.RenderPass, nullptr);
+    vkDestroyRenderPass(g_PlatformState.Device, g_RenderState.CopyPass, nullptr);
+  });
+}
+
+internal void
+InitShadowRenderpass()
+{
+  VkAttachmentDescription depth_attachment = {};
+	// Depth attachment
+	depth_attachment.flags = 0;
+	depth_attachment.format = g_RenderState.DepthFormat;
+	depth_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+	depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	depth_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	depth_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	depth_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	depth_attachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+	VkAttachmentReference depth_attachment_ref = {};
+	depth_attachment_ref.attachment = 0;
+	depth_attachment_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+	//we are going to create 1 subpass, which is the minimum you can do
+	VkSubpassDescription subpass = {};
+	subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+
+	//hook the depth attachment into the subpass
+	subpass.pDepthStencilAttachment = &depth_attachment_ref;
+
+	//1 dependency, which is from "outside" into the subpass. And we can read or write color
+	VkSubpassDependency dependency = {};
+	dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+	dependency.dstSubpass = 0;
+	dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency.srcAccessMask = 0;
+	dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+	VkRenderPassCreateInfo render_pass_info = {};
+	render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+	//2 attachments from said array
+	render_pass_info.attachmentCount = 1;
+	render_pass_info.pAttachments = &depth_attachment;
+	render_pass_info.subpassCount = 1;
+	render_pass_info.pSubpasses = &subpass;
+
+  VK_CHECK(vkCreateRenderPass(g_PlatformState.Device, &render_pass_info, nullptr, &g_RenderState.ShadowPass));
+
+  g_RenderState.MainDeletionQueue.push_function([=]()
+  {
+    vkDestroyRenderPass(g_PlatformState.Device, g_RenderState.ShadowPass, nullptr);
   });
 }
 
 internal void
 InitFramebuffers()
 {
-  VkFramebufferCreateInfo fb_info = vk::init::framebuffer_create_info( g_RenderState.RenderPass, g_PlatformState.WindowExtent );
+  const u32 swapchain_imagecount = static_cast<u32>(g_RenderState.SwapchainImages.size());
+	g_RenderState.Framebuffers = std::vector<VkFramebuffer>(swapchain_imagecount);
 
-  const u64 framebufferSize = g_RenderState.SwapchainImages.size();
-  g_RenderState.Framebuffers.resize(framebufferSize);
-  
-  for (u64 i = 0; i < framebufferSize; i++)
+	//create the framebuffers for the swapchain images. This will connect the render-pass to the images for rendering
+	VkFramebufferCreateInfo fwd_info = vk::init::framebuffer_create_info(g_RenderState.RenderPass, g_PlatformState.WindowExtent);
+	VkImageView attachments[2];
+	attachments[0] = g_RenderState.RawRenderImage.DefaultView;
+	attachments[1] = g_RenderState.DepthImage.DefaultView;
+
+	fwd_info.pAttachments = attachments;
+	fwd_info.attachmentCount = 2;
+	VK_CHECK(vkCreateFramebuffer(g_PlatformState.Device, &fwd_info, nullptr, &g_RenderState.ForwardFramebuffer));
+
+	//create the framebuffer for shadow pass	
+	VkFramebufferCreateInfo sh_info = vk::init::framebuffer_create_info(g_RenderState.ShadowPass, g_RenderState.ShadowExtent);
+	sh_info.pAttachments = &g_RenderState.ShadowImage.DefaultView;
+	sh_info.attachmentCount = 1;
+	VK_CHECK(vkCreateFramebuffer(g_PlatformState.Device, &sh_info, nullptr, &g_RenderState.ShadowFramebuffer));
+	
+	for (uint32_t i = 0; i < swapchain_imagecount; i++)
   {
-    VkImageView attachments[2];
-    attachments[0] = g_RenderState.SwapchainImageViews[i];
-    attachments[1] = g_RenderState.DepthImageView;
+		VkFramebufferCreateInfo fb_info = vk::init::framebuffer_create_info(g_RenderState.CopyPass, g_PlatformState.WindowExtent);
+		fb_info.pAttachments = &g_RenderState.SwapchainImageViews[i];
+		fb_info.attachmentCount = 1;
+		VK_CHECK(vkCreateFramebuffer(g_PlatformState.Device, &fb_info, nullptr, &g_RenderState.Framebuffers[i]));
 
-    fb_info.pAttachments = attachments;
-    fb_info.attachmentCount = 2;
-
-    VK_CHECK(vkCreateFramebuffer(g_PlatformState.Device, &fb_info, nullptr, &g_RenderState.Framebuffers[i]));
-
-    g_RenderState.MainDeletionQueue.push_function([=]()
+		g_RenderState.MainDeletionQueue.push_function([=]()
     {
-      vkDestroyFramebuffer(g_PlatformState.Device, g_RenderState.Framebuffers[i], nullptr);
-      vkDestroyImageView(g_PlatformState.Device, g_RenderState.SwapchainImageViews[i], nullptr);
-    });
+			vkDestroyFramebuffer(g_PlatformState.Device, g_RenderState.Framebuffers[i], nullptr);
+			vkDestroyImageView(g_PlatformState.Device, g_RenderState.SwapchainImageViews[i], nullptr);
+		});
   }
 }
 
@@ -458,237 +884,161 @@ InitSyncStructures()
 internal void
 InitDescriptors()
 {
-  std::vector<VkDescriptorPoolSize> sizes =
-  {
-    { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 10 },
-    { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 10 },
-    { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10 },
-    { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 10 }
-  };
+  g_RenderState.DescriptorAllocator = new vk::descriptor::allocator {};
+	//_descriptorAllocator->init(_device);
 
-  VkDescriptorPoolCreateInfo pool_info = {};
-  pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-  pool_info.flags = 0;
-  pool_info.maxSets = 10;
-  pool_info.poolSizeCount = (u32)sizes.size();
-  pool_info.pPoolSizes = sizes.data();
-  
-  vkCreateDescriptorPool(g_PlatformState.Device, &pool_info, nullptr, &g_RenderState.DescriptorPool);
+	g_RenderState.DescriptorLayoutCache = new vk::descriptor::cache {};
+	//g_RenderState.DescriptorLayoutCache->init(_device);
 
-  VkDescriptorSetLayoutBinding cameraBind = vk::init::descriptorset_layout_binding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,VK_SHADER_STAGE_VERTEX_BIT,0);
-  VkDescriptorSetLayoutBinding sceneBind = vk::init::descriptorset_layout_binding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 1);
-  
-  VkDescriptorSetLayoutBinding bindings[] = { cameraBind, sceneBind };  
-  
-  VkDescriptorSetLayoutCreateInfo setInfo = {};
-  setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-  setInfo.pNext = nullptr;
-  setInfo.bindingCount = 2;
-  setInfo.flags = 0;
-  setInfo.pBindings = bindings;
+	VkDescriptorSetLayoutBinding textureBind = vk::init::descriptorset_layout_binding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
 
-  vkCreateDescriptorSetLayout(g_PlatformState.Device, &setInfo, nullptr, &g_RenderState.GlobalSetLayout);
+	VkDescriptorSetLayoutCreateInfo set3info = {};
+	set3info.bindingCount = 1;
+	set3info.flags = 0;
+	set3info.pNext = nullptr;
+	set3info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+	set3info.pBindings = &textureBind;
 
-  VkDescriptorSetLayoutBinding objectBind = vk::init::descriptorset_layout_binding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 0);
+	g_RenderState.SingleTextureSetLayout = g_RenderState.DescriptorLayoutCache->CreateDescriptorLayout(&set3info);
 
-  VkDescriptorSetLayoutCreateInfo set2info = {};
-  set2info.bindingCount = 1;
-  set2info.flags = 0;
-  set2info.pNext = nullptr;
-  set2info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-  set2info.pBindings = &objectBind;
+	const size_t sceneParamBufferSize = FRAME_OVERLAP * PadUniformBufferSize(sizeof(GPUSceneData));
 
-  vkCreateDescriptorSetLayout(g_PlatformState.Device, &set2info, nullptr, &g_RenderState.ObjectSetLayout);
+	for (int i = 0; i < FRAME_OVERLAP; i++)
+	{
+		g_RenderState.Frames[i].DynamicDescriptorAllocator = new vk::descriptor::allocator {};
+		// g_RenderState.Frames[i].DynamicDescriptorAllocator->init(_device);
 
-  VkDescriptorSetLayoutBinding textureBind = vk::init::descriptorset_layout_binding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
+		//1 megabyte of dynamic data buffer
+		auto dynamicDataBuffer = CreateBuffer(1000000, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_ONLY);
+		g_RenderState.Frames[i].DynamicData.Init(g_Allocator, dynamicDataBuffer, (u32)g_PlatformState.GpuProperties.limits.minUniformBufferOffsetAlignment); 
 
-  VkDescriptorSetLayoutCreateInfo set3info = {};
-  set3info.bindingCount = 1;
-  set3info.flags = 0;
-  set3info.pNext = nullptr;
-  set3info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-  set3info.pBindings = &textureBind;
-
-  vkCreateDescriptorSetLayout(g_PlatformState.Device, &set3info, nullptr, &g_RenderState.SingleTextureSetLayout);
-
-  const u64 sceneParamBufferSize = FRAME_OVERLAP * PadUniformBufferSize(sizeof(GPUSceneData));
-  g_RenderState.SceneParameterBuffer = CreateBuffer(sceneParamBufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
-
-  for (int i = 0; i < FRAME_OVERLAP; i++)
-  {
-    g_RenderState.Frames[i].CameraBuffer = CreateBuffer(sizeof(GPUCameraData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
-
-    const int MAX_OBJECTS = 10000;
-    g_RenderState.Frames[i].ObjectBuffer = CreateBuffer(sizeof(GPUObjectData) * MAX_OBJECTS, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
-
-    VkDescriptorSetAllocateInfo allocInfo = {};
-    allocInfo.pNext = nullptr;
-    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    allocInfo.descriptorPool = g_RenderState.DescriptorPool;
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &g_RenderState.GlobalSetLayout;
-
-    vkAllocateDescriptorSets(g_PlatformState.Device, &allocInfo, &g_RenderState.Frames[i].GlobalDescriptor);
-
-    VkDescriptorSetAllocateInfo objectSetAlloc = {};
-    objectSetAlloc.pNext = nullptr;
-    objectSetAlloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    objectSetAlloc.descriptorPool = g_RenderState.DescriptorPool;
-    objectSetAlloc.descriptorSetCount = 1;
-    objectSetAlloc.pSetLayouts = &g_RenderState.ObjectSetLayout;
-
-    vkAllocateDescriptorSets(g_PlatformState.Device, &objectSetAlloc, &g_RenderState.Frames[i].ObjectDescriptor);
-
-    //
-
-    VkDescriptorBufferInfo cameraInfo = {};
-    cameraInfo.buffer = g_RenderState.Frames[i].CameraBuffer.Buffer;
-    cameraInfo.offset = 0;
-    cameraInfo.range = sizeof(GPUCameraData);
-
-    VkDescriptorBufferInfo sceneInfo = {};
-    sceneInfo.buffer = g_RenderState.SceneParameterBuffer.Buffer;
-    sceneInfo.offset = PadUniformBufferSize(sizeof(GPUSceneData)) * i;
-    sceneInfo.range = sizeof(GPUSceneData);
-
-    VkDescriptorBufferInfo objectBufferInfo;
-    objectBufferInfo.buffer = g_RenderState.Frames[i].ObjectBuffer.Buffer;
-    objectBufferInfo.offset = 0;
-    objectBufferInfo.range = sizeof(GPUObjectData) * MAX_OBJECTS;
-
-    VkWriteDescriptorSet cameraWrite = vk::init::write_descriptor_buffer(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, g_RenderState.Frames[i].GlobalDescriptor, &cameraInfo, 0);
-    VkWriteDescriptorSet sceneWrite = vk::init::write_descriptor_buffer(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, g_RenderState.Frames[i].GlobalDescriptor, &sceneInfo, 1);
-    VkWriteDescriptorSet objectWrite = vk::init::write_descriptor_buffer(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, g_RenderState.Frames[i].ObjectDescriptor, &objectBufferInfo, 0);
-
-    VkWriteDescriptorSet setWrites[] = { cameraWrite, sceneWrite, objectWrite };
-     
-
-    vkUpdateDescriptorSets(g_PlatformState.Device, 3, setWrites, 0, nullptr);    
-  }
+		//20 megabyte of debug output
+		g_RenderState.Frames[i].DebugOutputBuffer = CreateBuffer(200000000, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_TO_CPU);
+	}
 }
 
-internal void
-DrawObjects(VkCommandBuffer cmd,
-            RenderObject* first,
-            u64 count)
-{
-  FrameData& currentFrame = g_RenderState.GetCurrentFrame();
+// internal void
+// DrawObjects(VkCommandBuffer cmd,
+//             RenderObject* first,
+//             u64 count)
+// {
+//   FrameData& currentFrame = g_RenderState.GetCurrentFrame();
 
-  glm::vec3 camPos = { 0.f,-2.f,-10.f };
+//   glm::vec3 camPos = { 0.f,-2.f,-10.f };
 
-  glm::mat4 view = glm::translate(glm::mat4(1.f), camPos);
-  glm::mat4 projection = glm::perspective(glm::radians(70.f), (f32)g_PlatformState.WindowExtent.width / g_PlatformState.WindowExtent.height, 0.1f, 200.0f);//1700.f / 900.f, 0.1f, 200.0f);//g_PlatformState.WindowExtent
-  projection[1][1] *= -1;
+//   glm::mat4 view = glm::translate(glm::mat4(1.f), camPos);
+//   glm::mat4 projection = glm::perspective(glm::radians(70.f), (f32)g_PlatformState.WindowExtent.width / g_PlatformState.WindowExtent.height, 0.1f, 200.0f);//1700.f / 900.f, 0.1f, 200.0f);//g_PlatformState.WindowExtent
+//   projection[1][1] *= -1;
 
-  GPUCameraData camData;
-  camData.Projection = projection;
-  camData.View = view;
-  camData.Viewproj = projection * view;
+//   GPUCameraData camData;
+//   camData.Projection = projection;
+//   camData.View = view;
+//   camData.Viewproj = projection * view;
 
-  void* data;
-  vmaMapMemory(g_Allocator, currentFrame.CameraBuffer.Allocation, &data);
+//   void* data;
+//   vmaMapMemory(g_Allocator, currentFrame.CameraBuffer.Allocation, &data);
 
-  memcpy(data, &camData, sizeof(GPUCameraData));
+//   memcpy(data, &camData, sizeof(GPUCameraData));
 
-  vmaUnmapMemory(g_Allocator, currentFrame.CameraBuffer.Allocation);
+//   vmaUnmapMemory(g_Allocator, currentFrame.CameraBuffer.Allocation);
 
-  float framed = (g_RenderState.FrameNumber / 120.f);
+//   float framed = (g_RenderState.FrameNumber / 120.f);
 
-  g_RenderState.SceneParameters.AmbientColor = { sin(framed),0,cos(framed),1 };
+//   g_RenderState.SceneParameters.AmbientColor = { sin(framed),0,cos(framed),1 };
 
-  char* sceneData;
-  vmaMapMemory(g_Allocator, g_RenderState.SceneParameterBuffer.Allocation , (void**)&sceneData);
+//   char* sceneData;
+//   vmaMapMemory(g_Allocator, g_RenderState.SceneParameterBuffer.Allocation , (void**)&sceneData);
 
-  int frameIndex = g_RenderState.FrameNumber % FRAME_OVERLAP;
+//   int frameIndex = g_RenderState.FrameNumber % FRAME_OVERLAP;
 
-  sceneData += PadUniformBufferSize(sizeof(GPUSceneData)) * frameIndex;
+//   sceneData += PadUniformBufferSize(sizeof(GPUSceneData)) * frameIndex;
 
-  memcpy(sceneData, &g_RenderState.SceneParameters, sizeof(GPUSceneData));
+//   memcpy(sceneData, &g_RenderState.SceneParameters, sizeof(GPUSceneData));
 
-  vmaUnmapMemory(g_Allocator, g_RenderState.SceneParameterBuffer.Allocation);
+//   vmaUnmapMemory(g_Allocator, g_RenderState.SceneParameterBuffer.Allocation);
 
-  void* objectData;
+//   void* objectData;
 
-  vmaMapMemory(g_Allocator, currentFrame.ObjectBuffer.Allocation, &objectData);
+//   vmaMapMemory(g_Allocator, currentFrame.ObjectBuffer.Allocation, &objectData);
 
-  GPUObjectData* objectSSBO = (GPUObjectData*)objectData;
+//   GPUObjectData* objectSSBO = (GPUObjectData*)objectData;
 
-  for (int i = 0; i < count; i++)
-  {
-    RenderObject& object = first[i];
-    objectSSBO[i].ModelMatrix = object.TransformMatrix;
-  }
+//   for (int i = 0; i < count; i++)
+//   {
+//     RenderObject& object = first[i];
+//     objectSSBO[i].ModelMatrix = object.TransformMatrix;
+//   }
 
-  vmaUnmapMemory(g_Allocator, currentFrame.ObjectBuffer.Allocation);
+//   vmaUnmapMemory(g_Allocator, currentFrame.ObjectBuffer.Allocation);
 
-  Mesh* lastMesh = nullptr;
-  Material* lastMaterial = nullptr;
+//   Mesh* lastMesh = nullptr;
+//   vk::util::material* lastMaterial = nullptr;
 
-  std::vector<indirect_batch> draws = CompactDraws(first, (int)count);
+//   std::vector<indirect_batch> draws = CompactDraws(first, (int)count);
 
-  for(indirect_batch& draw : draws)
-  {
-    if (draw.Material != lastMaterial)
-    {
-      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.Material->Pipeline);
-      vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.Material->PipelineLayout, 0, 1, &currentFrame.GlobalDescriptor, 0, nullptr);
-      vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.Material->PipelineLayout, 1, 1, &currentFrame.ObjectDescriptor, 0, nullptr);
-      if (draw.Material->TextureSet != VK_NULL_HANDLE)
-      {
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.Material->PipelineLayout, 2, 1, &draw.Material->TextureSet, 0, nullptr);
-      }
+//   for(indirect_batch& draw : draws)
+//   {
+//     if (draw.Material != lastMaterial)
+//     {
+//       vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.Material->Pipeline);
+//       vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.Material->PipelineLayout, 0, 1, &currentFrame.GlobalDescriptor, 0, nullptr);
+//       vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.Material->PipelineLayout, 1, 1, &currentFrame.ObjectDescriptor, 0, nullptr);
+//       if (draw.Material->TextureSet != VK_NULL_HANDLE)
+//       {
+//         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.Material->PipelineLayout, 2, 1, &draw.Material->TextureSet, 0, nullptr);
+//       }
 
-      lastMaterial = draw.Material;
-    }
+//       lastMaterial = draw.Material;
+//     }
 
-    //MeshPushConstants constants;
-    //constants.RenderMatrix = draw.TransformMatrix;
-    //vkCmdPushConstants(cmd, draw.Material->PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants), &constants);
+//     //MeshPushConstants constants;
+//     //constants.RenderMatrix = draw.TransformMatrix;
+//     //vkCmdPushConstants(cmd, draw.Material->PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants), &constants);
 
-    if (draw.Mesh != lastMesh)
-    {
-      VkDeviceSize offset = 0;
-      vkCmdBindVertexBuffers(cmd, 0, 1, &draw.Mesh->VertexBuffer.Buffer, &offset);
-      lastMesh = draw.Mesh;
-    }
+//     if (draw.Mesh != lastMesh)
+//     {
+//       VkDeviceSize offset = 0;
+//       vkCmdBindVertexBuffers(cmd, 0, 1, &draw.Mesh->VertexBuffer.Buffer, &offset);
+//       lastMesh = draw.Mesh;
+//     }
 
-    for(u32 i = draw.First; i < draw.Count; i++)
-    {
-      vkCmdDraw(cmd, (u32)draw.Mesh->Vertices.size(), 1, 0, (u32)i);
-    }
-  }
+//     for(u32 i = draw.First; i < draw.Count; i++)
+//     {
+//       vkCmdDraw(cmd, (u32)draw.Mesh->Vertices.size(), 1, 0, (u32)i);
+//     }
+//   }
 
-  // for (u64 i = 0; i < count; i++)
-  // {
-  //   RenderObject& object = first[i];
+//   // for (u64 i = 0; i < count; i++)
+//   // {
+//   //   RenderObject& object = first[i];
 
-  //   if (object.Material != lastMaterial)
-  //   {
-  //     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.Material->Pipeline);
-  //     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.Material->PipelineLayout, 0, 1, &currentFrame.GlobalDescriptor, 0, nullptr);
-  //     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.Material->PipelineLayout, 1, 1, &currentFrame.ObjectDescriptor, 0, nullptr);
-  //     if (object.Material->TextureSet != VK_NULL_HANDLE)
-  //     {
-  //       vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.Material->PipelineLayout, 2, 1, &object.Material->TextureSet, 0, nullptr);
-  //     }
+//   //   if (object.Material != lastMaterial)
+//   //   {
+//   //     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.Material->Pipeline);
+//   //     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.Material->PipelineLayout, 0, 1, &currentFrame.GlobalDescriptor, 0, nullptr);
+//   //     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.Material->PipelineLayout, 1, 1, &currentFrame.ObjectDescriptor, 0, nullptr);
+//   //     if (object.Material->TextureSet != VK_NULL_HANDLE)
+//   //     {
+//   //       vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.Material->PipelineLayout, 2, 1, &object.Material->TextureSet, 0, nullptr);
+//   //     }
 
-  //     lastMaterial = object.Material;
-  //   }
+//   //     lastMaterial = object.Material;
+//   //   }
 
-  //   MeshPushConstants constants;
-  //   constants.RenderMatrix = object.TransformMatrix;
-  //   vkCmdPushConstants(cmd, object.Material->PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants), &constants);
+//   //   MeshPushConstants constants;
+//   //   constants.RenderMatrix = object.TransformMatrix;
+//   //   vkCmdPushConstants(cmd, object.Material->PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants), &constants);
 
-  //   if (object.Mesh != lastMesh)
-  //   {
-  //     VkDeviceSize offset = 0;
-  //     vkCmdBindVertexBuffers(cmd, 0, 1, &object.Mesh->VertexBuffer.Buffer, &offset);
-  //     lastMesh = object.Mesh;
-  //   }
+//   //   if (object.Mesh != lastMesh)
+//   //   {
+//   //     VkDeviceSize offset = 0;
+//   //     vkCmdBindVertexBuffers(cmd, 0, 1, &object.Mesh->VertexBuffer.Buffer, &offset);
+//   //     lastMesh = object.Mesh;
+//   //   }
     
-  //   vkCmdDraw(cmd, (u32)object.Mesh->Vertices.size(), 1, 0, (u32)i);
-  // }
-}
+//   //   vkCmdDraw(cmd, (u32)object.Mesh->Vertices.size(), 1, 0, (u32)i);
+//   // }
+// }
 
 void
 ImmediateSubmit(std::function<void(VkCommandBuffer cmd)>&& function)
@@ -716,57 +1066,383 @@ ImmediateSubmit(std::function<void(VkCommandBuffer cmd)>&& function)
   vkResetCommandPool(g_PlatformState.Device, g_RenderState.UploadContext.CommandPool, 0);
 }
 
+// internal void
+// Draw()
+// {
+//   FrameData& currentFrame = g_RenderState.GetCurrentFrame();
+
+//   VK_CHECK(vkWaitForFences(g_PlatformState.Device, 1, &currentFrame.RenderFence, true, 1000000000));
+//   VK_CHECK(vkResetFences(g_PlatformState.Device, 1, &currentFrame.RenderFence));
+
+//   u32 swapchainImageIndex;
+//   VK_CHECK(vkAcquireNextImageKHR(g_PlatformState.Device, g_RenderState.Swapchain, 1000000000, currentFrame.PresentSemaphore, nullptr, &swapchainImageIndex));
+
+//   VK_CHECK(vkResetCommandBuffer(currentFrame.MainCommandBuffer, 0));
+
+//   VkCommandBuffer cmd = currentFrame.MainCommandBuffer;
+
+//   VkCommandBufferBeginInfo cmdBeginInfo = {};
+//   cmdBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+//   cmdBeginInfo.pNext = nullptr;
+//   cmdBeginInfo.pInheritanceInfo = nullptr;
+//   cmdBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+//   VK_CHECK(vkBeginCommandBuffer(cmd, &cmdBeginInfo));
+
+//   VkClearValue clearValue;
+//   float flash = abs(sin(g_RenderState.FrameNumber / 120.f));
+//   clearValue.color = { { 0.0f, 0.0f, flash * 0.5f, 1.0f } };
+
+//   VkClearValue depthClear;
+//   depthClear.depthStencil.depth = 1.f;
+
+//   VkRenderPassBeginInfo rpInfo = vk::init::renderpass_begin_info(g_RenderState.RenderPass, g_PlatformState.WindowExtent, g_RenderState.Framebuffers[swapchainImageIndex]);
+
+//   rpInfo.clearValueCount = 2;
+
+//   VkClearValue clearValues[] = { clearValue, depthClear };
+
+//   rpInfo.pClearValues = &clearValues[0];
+
+//   vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+//   DrawObjects(cmd, g_RenderState.Renderables.data(), g_RenderState.Renderables.size());
+
+//   ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
+
+//   vkCmdEndRenderPass(cmd);
+//   VK_CHECK(vkEndCommandBuffer(cmd));
+
+//   VkSubmitInfo submit = {};
+//   submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+//   submit.pNext = nullptr;
+
+//   VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+//   submit.pWaitDstStageMask = &waitStage;
+
+//   submit.waitSemaphoreCount = 1;
+//   submit.pWaitSemaphores = &currentFrame.PresentSemaphore;
+
+//   submit.signalSemaphoreCount = 1;
+//   submit.pSignalSemaphores = &currentFrame.RenderSemaphore;
+
+//   submit.commandBufferCount = 1;
+//   submit.pCommandBuffers = &cmd;
+
+//   VK_CHECK(vkQueueSubmit(g_RenderState.GraphicsQueue, 1, &submit, currentFrame.RenderFence));
+
+//   VkPresentInfoKHR presentInfo = {};
+//   presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+//   presentInfo.pNext = nullptr;
+
+//   presentInfo.pSwapchains = &g_RenderState.Swapchain;
+//   presentInfo.swapchainCount = 1;
+
+//   presentInfo.pWaitSemaphores = &currentFrame.RenderSemaphore;
+//   presentInfo.waitSemaphoreCount = 1;
+
+//   presentInfo.pImageIndices = &swapchainImageIndex;
+
+//   VK_CHECK(vkQueuePresentKHR(g_RenderState.GraphicsQueue, &presentInfo));
+
+//   g_RenderState.FrameNumber++;
+// }
+
+void
+ForwardPass(VkClearValue clearValue, VkCommandBuffer cmd)
+{
+	//vkutil::VulkanScopeTimer timer(cmd, _profiler, "Forward Pass");
+	//vkutil::VulkanPipelineStatRecorder timer2(cmd, _profiler, "Forward Primitives");
+	//clear depth at 0
+	VkClearValue depthClear;
+	depthClear.depthStencil.depth = 0.f;
+
+	//start the main renderpass. 
+	//We will use the clear color from above, and the framebuffer of the index the swapchain gave us
+	VkRenderPassBeginInfo rpInfo = vk::init::renderpass_begin_info(g_RenderState.RenderPass, g_PlatformState.WindowExtent, g_RenderState.ForwardFramebuffer/*_framebuffers[swapchainImageIndex]*/);
+
+	//connect clear values
+	rpInfo.clearValueCount = 2;
+
+	VkClearValue clearValues[] = { clearValue, depthClear };
+
+	rpInfo.pClearValues = &clearValues[0];
+	vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+	VkViewport viewport;
+	viewport.x = 0.0f;
+	viewport.y = 0.0f;
+	viewport.width = (f32)g_PlatformState.WindowExtent.width;
+	viewport.height = (f32)g_PlatformState.WindowExtent.height;
+	viewport.minDepth = 0.0f;
+	viewport.maxDepth = 1.0f;
+
+	VkRect2D scissor;
+	scissor.offset = { 0, 0 };
+	scissor.extent = g_PlatformState.WindowExtent;
+
+	vkCmdSetViewport(cmd, 0, 1, &viewport);
+	vkCmdSetScissor(cmd, 0, 1, &scissor);
+	vkCmdSetDepthBias(cmd, 0, 0, 0);
+
+
+	//stats.drawcalls = 0;
+	//stats.draws = 0;
+	//stats.objects = 0;
+	//stats.triangles = 0;
+
+	{
+		//TracyVkZone(_graphicsQueueContext, get_current_frame()._mainCommandBuffer, "Forward Pass");
+		DrawObjectsForward(cmd, g_RenderState.RenderScene->ForwardPass);
+		DrawObjectsForward(cmd, g_RenderState.RenderScene->TransparentForwardPass);
+	}
+
+
+	{
+		//TracyVkZone(_graphicsQueueContext, get_current_frame()._mainCommandBuffer, "Imgui Draw");
+		ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
+	}
+
+	//finalize the render pass
+	vkCmdEndRenderPass(cmd);
+}
+
+
+void
+ShadowPass(VkCommandBuffer cmd)
+{
+	//vkutil::VulkanScopeTimer timer(cmd, _profiler, "Shadow Pass");
+	//vkutil::VulkanPipelineStatRecorder timer2(cmd, _profiler, "Shadow Primitives");
+	if (FREEZE_SHADOWS) return;
+
+	if (!SHADOWCAST)
+	{
+		return;
+	}
+
+	//clear depth at 1
+	VkClearValue depthClear;
+	depthClear.depthStencil.depth = 1.f;	
+	VkRenderPassBeginInfo rpInfo = vk::init::renderpass_begin_info(g_RenderState.ShadowPass, g_RenderState.ShadowExtent, g_RenderState.ShadowFramebuffer);
+
+	//connect clear values
+	rpInfo.clearValueCount = 1;
+
+	VkClearValue clearValues[] = { depthClear };
+
+	rpInfo.pClearValues = &clearValues[0];
+	vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+	VkViewport viewport;
+	viewport.x = 0.0f;
+	viewport.y = 0.0f;
+	viewport.width = (f32)g_RenderState.ShadowExtent.width;
+	viewport.height = (f32)g_RenderState.ShadowExtent.height;
+	viewport.minDepth = 0.0f;
+	viewport.maxDepth = 1.0f;
+
+	VkRect2D scissor;
+	scissor.offset = { 0, 0 };
+	scissor.extent = g_RenderState.ShadowExtent;
+
+	vkCmdSetViewport(cmd, 0, 1, &viewport);
+	vkCmdSetScissor(cmd, 0, 1, &scissor);
+	
+
+
+	g_RenderState.stats.drawcalls = 0;
+	g_RenderState.stats.draws = 0;
+	g_RenderState.stats.objects = 0;
+	g_RenderState.stats.triangles = 0;
+
+	if(g_RenderState.RenderScene->ShadowPass.Batches.size() > 0)
+	{
+		//TracyVkZone(g_RenderState.GraphicsQueueContext, g_RenderState.GetCurrentFrame().MainCommandBuffer, "Shadow  Pass");
+		DrawObjectsShadow(cmd, g_RenderState.RenderScene->ShadowPass);
+	}
+
+	//finalize the render pass
+	vkCmdEndRenderPass(cmd);
+}
+
+void
+CopyRenderToSwapchain(u32 swapchainImageIndex, VkCommandBuffer cmd)
+{
+	//start the main renderpass. 
+	//We will use the clear color from above, and the framebuffer of the index the swapchain gave us
+	VkRenderPassBeginInfo copyRP = vk::init::renderpass_begin_info(g_RenderState.CopyPass, g_PlatformState.WindowExtent, g_RenderState.Framebuffers[swapchainImageIndex]);
+
+
+	vkCmdBeginRenderPass(cmd, &copyRP, VK_SUBPASS_CONTENTS_INLINE);
+
+	VkViewport viewport;
+	viewport.x = 0.0f;
+	viewport.y = 0.0f;
+	viewport.width = (f32)g_PlatformState.WindowExtent.width;
+	viewport.height = (f32)g_PlatformState.WindowExtent.height;
+	viewport.minDepth = 0.0f;
+	viewport.maxDepth = 1.0f;
+
+	VkRect2D scissor;
+	scissor.offset = { 0, 0 };
+	scissor.extent = g_PlatformState.WindowExtent;
+
+	vkCmdSetViewport(cmd, 0, 1, &viewport);
+	vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+	vkCmdSetDepthBias(cmd, 0, 0, 0);
+
+	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_RenderState.BlitPipeline);
+
+	VkDescriptorImageInfo sourceImage;
+	sourceImage.sampler = g_RenderState.SmoothSampler;
+
+	sourceImage.imageView = g_RenderState.RawRenderImage.DefaultView;
+	sourceImage.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+	VkDescriptorSet blitSet;
+
+  vk::descriptor::builder::descriptor_bind binds[] =
+	{
+		{ 0, nullptr, &sourceImage, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT }
+	};
+
+	vk::descriptor::builder::BuildDescriptorSet(*g_RenderState.GetCurrentFrame().DynamicDescriptorAllocator, *g_RenderState.DescriptorLayoutCache, blitSet, binds);
+
+	vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_RenderState.BlitLayout, 0, 1, &blitSet, 0, nullptr);
+
+	vkCmdDraw(cmd, 3, 1, 0, 0);
+
+	vkCmdEndRenderPass(cmd);
+}
+
 internal void
-Draw()
+Draw2()
 {
   FrameData& currentFrame = g_RenderState.GetCurrentFrame();
 
-  VK_CHECK(vkWaitForFences(g_PlatformState.Device, 1, &currentFrame.RenderFence, true, 1000000000));
-  VK_CHECK(vkResetFences(g_PlatformState.Device, 1, &currentFrame.RenderFence));
+  {
+    //ZoneScopedN("Fence Wait");
+    //wait until the gpu has finished rendering the last frame. Timeout of 1 second
+    
+    VK_CHECK(vkWaitForFences(g_PlatformState.Device, 1, &currentFrame.RenderFence, true, 1000000000));
+    VK_CHECK(vkResetFences(g_PlatformState.Device, 1, &currentFrame.RenderFence));
 
-  u32 swapchainImageIndex;
-  VK_CHECK(vkAcquireNextImageKHR(g_PlatformState.Device, g_RenderState.Swapchain, 1000000000, currentFrame.PresentSemaphore, nullptr, &swapchainImageIndex));
+    currentFrame.DynamicData.Reset();
 
+    g_RenderState.RenderScene->BuildBatches();
+  }
+
+  currentFrame.FrameDeletionQueue.flush();
+  currentFrame.DynamicDescriptorAllocator->ResetPools();
+
+  //now that we are sure that the commands finished executing, we can safely reset the command buffer to begin recording again.
   VK_CHECK(vkResetCommandBuffer(currentFrame.MainCommandBuffer, 0));
 
+  uint32_t swapchainImageIndex;
+  {
+    // ZoneScopedN("Aquire Image");
+    //request image from the swapchain
+
+    VK_CHECK(vkAcquireNextImageKHR(g_PlatformState.Device, g_RenderState.Swapchain, 0, currentFrame.PresentSemaphore, nullptr, &swapchainImageIndex));
+  }
+
+  //naming it cmd for shorter writing
   VkCommandBuffer cmd = currentFrame.MainCommandBuffer;
 
-  VkCommandBufferBeginInfo cmdBeginInfo = {};
-  cmdBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-  cmdBeginInfo.pNext = nullptr;
-  cmdBeginInfo.pInheritanceInfo = nullptr;
-  cmdBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  //begin the command buffer recording. We will use this command buffer exactly once, so we want to let vulkan know that
+  VkCommandBufferBeginInfo cmdBeginInfo = vk::init::command_buffer_begin_info(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
 
   VK_CHECK(vkBeginCommandBuffer(cmd, &cmdBeginInfo));
 
+  //make a clear-color from frame number. This will flash with a 120 frame period.
   VkClearValue clearValue;
   float flash = abs(sin(g_RenderState.FrameNumber / 120.f));
-  clearValue.color = { { 0.0f, 0.0f, flash * 0.5f, 1.0f } };
+  clearValue.color = {{0.1f, 0.1f, 0.1f, 1.0f}};
 
-  VkClearValue depthClear;
-  depthClear.depthStencil.depth = 1.f;
+  //_profiler->grab_queries(cmd);
 
-  VkRenderPassBeginInfo rpInfo = vk::init::renderpass_begin_info(g_RenderState.RenderPass, g_PlatformState.WindowExtent, g_RenderState.Framebuffers[swapchainImageIndex]);
+  {
 
-  rpInfo.clearValueCount = 2;
+    g_RenderState.PostCullBarriers.clear();
+    g_RenderState.CullReadyBarriers.clear();
 
-  VkClearValue clearValues[] = { clearValue, depthClear };
+    //TracyVkZone(_graphicsQueueContext, get_current_frame()._mainCommandBuffer, "All Frame");
+    //ZoneScopedNC("Render Frame", tracy::Color::White);
 
-  rpInfo.pClearValues = &clearValues[0];
+    // vk::util::VulkanScopeTimer timer(cmd, _profiler, "All Frame");
 
-  vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
+    {
+      // vkutil::VulkanScopeTimer timer2(cmd, _profiler, "Ready Frame");
 
-  DrawObjects(cmd, g_RenderState.Renderables.data(), g_RenderState.Renderables.size());
+      ReadyMeshDraw(cmd);
 
-  ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
+      ReadyCullData(g_RenderState.RenderScene->ForwardPass, cmd);
+      ReadyCullData(g_RenderState.RenderScene->TransparentForwardPass, cmd);
+      ReadyCullData(g_RenderState.RenderScene->ShadowPass, cmd);
 
-  vkCmdEndRenderPass(cmd);
+      vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, (u32)g_RenderState.CullReadyBarriers.size(), g_RenderState.CullReadyBarriers.data(), 0, nullptr);
+    }
+
+    CullParams forwardCull;
+    forwardCull.projmat = g_RenderState.Camera.GetProjectionMatrix(true);
+    forwardCull.viewmat = g_RenderState.Camera.GetViewMatrix();
+    forwardCull.frustrumCull = true;
+    forwardCull.occlusionCull = true;
+    forwardCull.drawDist = 5000; // draw distance
+    forwardCull.aabb = false;
+    {
+      ExecuteComputeCull(cmd, g_RenderState.RenderScene->ForwardPass, forwardCull);
+      ExecuteComputeCull(cmd, g_RenderState.RenderScene->TransparentForwardPass, forwardCull);
+    }
+
+    glm::vec3 extent = g_RenderState.MainLight.shadowExtent * 10.f;
+    glm::mat4 projection = glm::orthoLH_ZO(-extent.x, extent.x, -extent.y, extent.y, -extent.z, extent.z);
+
+    CullParams shadowCull;
+    shadowCull.projmat = g_RenderState.MainLight.get_projection();
+    shadowCull.viewmat = g_RenderState.MainLight.get_view();
+    shadowCull.frustrumCull = true;
+    shadowCull.occlusionCull = false;
+    shadowCull.drawDist = 9999999;
+    shadowCull.aabb = true;
+
+    glm::vec3 aabbcenter = g_RenderState.MainLight.lightPosition;
+    glm::vec3 aabbextent = g_RenderState.MainLight.shadowExtent * 1.5f;
+    shadowCull.aabbmax = aabbcenter + aabbextent;
+    shadowCull.aabbmin = aabbcenter - aabbextent;
+
+    {
+      // vkutil::VulkanScopeTimer timer2(cmd, _profiler, "Shadow Cull");
+
+      if (SHADOWCAST)
+      {
+        ExecuteComputeCull(cmd, g_RenderState.RenderScene->ShadowPass, shadowCull);
+      }
+    }
+
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, 0, nullptr, (u32)g_RenderState.PostCullBarriers.size(), g_RenderState.PostCullBarriers.data(), 0, nullptr);
+
+    ShadowPass(cmd);
+
+    ForwardPass(clearValue, cmd);
+
+    ReduceDepth(cmd);
+
+    CopyRenderToSwapchain(swapchainImageIndex, cmd);
+  }
+
+  // TracyVkCollect(_graphicsQueueContext, get_current_frame()._mainCommandBuffer);
+
+  //finalize the command buffer (we can no longer add commands, but it can now be executed)
   VK_CHECK(vkEndCommandBuffer(cmd));
 
-  VkSubmitInfo submit = {};
-  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-  submit.pNext = nullptr;
+  //prepare the submission to the queue.
+  //we want to wait on the _presentSemaphore, as that semaphore is signaled when the swapchain is ready
+  //we will signal the _renderSemaphore, to signal that rendering has finished
 
+  VkSubmitInfo submit = vk::init::submit_info(&cmd);
   VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 
   submit.pWaitDstStageMask = &waitStage;
@@ -776,15 +1452,17 @@ Draw()
 
   submit.signalSemaphoreCount = 1;
   submit.pSignalSemaphores = &currentFrame.RenderSemaphore;
-
-  submit.commandBufferCount = 1;
-  submit.pCommandBuffers = &cmd;
-
-  VK_CHECK(vkQueueSubmit(g_RenderState.GraphicsQueue, 1, &submit, currentFrame.RenderFence));
-
-  VkPresentInfoKHR presentInfo = {};
-  presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-  presentInfo.pNext = nullptr;
+  {
+    //ZoneScopedN("Queue Submit");
+    //submit command buffer to the queue and execute it.
+    // _renderFence will now block until the graphic commands finish execution
+    VK_CHECK(vkQueueSubmit(g_RenderState.GraphicsQueue, 1, &submit, currentFrame.RenderFence));
+  }
+  //prepare present
+  // this will put the image we just rendered to into the visible window.
+  // we want to wait on the _renderSemaphore for that,
+  // as its necessary that drawing commands have finished before the image is displayed to the user
+  VkPresentInfoKHR presentInfo = vk::init::present_info();
 
   presentInfo.pSwapchains = &g_RenderState.Swapchain;
   presentInfo.swapchainCount = 1;
@@ -794,8 +1472,11 @@ Draw()
 
   presentInfo.pImageIndices = &swapchainImageIndex;
 
-  VK_CHECK(vkQueuePresentKHR(g_RenderState.GraphicsQueue, &presentInfo));
-
+  {
+    //ZoneScopedN("Queue Present");
+    VK_CHECK(vkQueuePresentKHR(g_RenderState.GraphicsQueue, &presentInfo));
+  }
+  //increase the number of frames drawn
   g_RenderState.FrameNumber++;
 }
 
@@ -868,134 +1549,107 @@ BuildPipeline(VkDevice device, VkRenderPass pass)
   return newPipeline;
 }
 
-internal Material*
-CreateMaterial(VkPipeline pipeline, VkPipelineLayout layout, const std::string& name)
+// internal vk::util::material*
+// CreateMaterial(VkPipeline pipeline, VkPipelineLayout layout, const std::string& name)
+// {
+//   vk::util::material mat;
+//   mat.Pipeline = pipeline;
+//   mat.PipelineLayout = layout;
+//   g_RenderState.Materials[name] = mat;
+//   return &g_RenderState.Materials[name];
+// }
+
+bool
+LoadComputeShader(const char* shaderPath,
+                  VkPipeline& pipeline,
+                  VkPipelineLayout& layout)
 {
-  Material mat;
-  mat.Pipeline = pipeline;
-  mat.PipelineLayout = layout;
-  g_RenderState.Materials[name] = mat;
-  return &g_RenderState.Materials[name];
+	shader_module computeModule;
+	vk::util::LoadShaderModule(shaderPath, &computeModule);
+
+	shader::shader_effect* computeEffect = new shader::shader_effect();
+	computeEffect->AddStage(&computeModule, VK_SHADER_STAGE_COMPUTE_BIT);
+
+	computeEffect->ReflectLayout(nullptr, 0);
+
+	compute_pipeline_builder computeBuilder;
+	computeBuilder.PipelineLayout = computeEffect->BuiltLayout;
+	computeBuilder.ShaderStage = vk::init::pipeline_shader_stage_create_info(VK_SHADER_STAGE_COMPUTE_BIT, computeModule.Module);
+
+
+	layout = computeEffect->BuiltLayout;
+	pipeline = computeBuilder.BuildPipeline();
+
+	vkDestroyShaderModule(g_PlatformState.Device, computeModule.Module, nullptr);
+
+	g_RenderState.MainDeletionQueue.push_function([=]()
+  {
+		vkDestroyPipeline(g_PlatformState.Device, pipeline, nullptr);
+		vkDestroyPipelineLayout(g_PlatformState.Device, layout, nullptr);
+	});
+
+	return true;
 }
 
 internal void
 InitPipelines()
 {
-  VkShaderModule triangleFragShader = LoadShaderModule("data/shaders/colored_triangle.frag.spv");
-  VkShaderModule triangleVertexShader = LoadShaderModule("data/shaders/colored_triangle.vert.spv");
+  g_RenderState.MaterialSystem = new vk::util::material_system();
+	// g_RenderState.MaterialSystem->Init(this);
+	g_RenderState.MaterialSystem->BuildDefaultTemplates( g_RenderState.ShaderCache, g_RenderState.RenderPass, g_RenderState.ShadowPass );
+		
+	//fullscreen triangle pipeline for blits
+	shader::shader_effect* blitEffect = new shader::shader_effect();
+	blitEffect->AddStage(g_RenderState.ShaderCache->GetShader(ShaderPath("fullscreen.vert.spv")), VK_SHADER_STAGE_VERTEX_BIT);
+	blitEffect->AddStage(g_RenderState.ShaderCache->GetShader(ShaderPath("blit.frag.spv")), VK_SHADER_STAGE_FRAGMENT_BIT);
+	blitEffect->ReflectLayout(nullptr, 0);
 
-  VkShaderModule redTriangleFragShader = LoadShaderModule("data/shaders/triangle.frag.spv");
-  VkShaderModule redTriangleVertexShader = LoadShaderModule("data/shaders/triangle.vert.spv");
+	pipeline_builder pipelineBuilder;
 
-  VkShaderModule meshVertShader = LoadShaderModule("data/shaders/tri_mesh.vert.spv");
-  VkShaderModule colorMeshFragShader = LoadShaderModule("data/shaders/default_lit.frag.spv");
+	//input assembly is the configuration for drawing triangle lists, strips, or individual points.
+	//we are just going to draw triangle list
+	pipelineBuilder.InputAssembly = vk::init::input_assembly_create_info(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
 
-  VkShaderModule texturedMeshFragShader = LoadShaderModule("data/shaders/textured_lit.frag.spv");
+	//configure the rasterizer to draw filled triangles
+	pipelineBuilder.Rasterizer = vk::init::rasterization_state_create_info(VK_POLYGON_MODE_FILL);
+	pipelineBuilder.Rasterizer.cullMode = VK_CULL_MODE_NONE;
+	//we dont use multisampling, so just run the default one
+	pipelineBuilder.Multisampling = vk::init::multisampling_state_create_info();
 
-  VkPipelineLayoutCreateInfo mesh_pipeline_layout_info = vk::init::pipeline_layout_create_info();
-  
-  VkPushConstantRange push_constant;
-  push_constant.offset = 0;
-  push_constant.size = sizeof(MeshPushConstants);
-  push_constant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+	//a single blend attachment with no blending and writing to RGBA
+	pipelineBuilder.ColorBlendAttachment = vk::init::color_blend_attachment_state();
 
-  mesh_pipeline_layout_info.pPushConstantRanges = &push_constant;
-  mesh_pipeline_layout_info.pushConstantRangeCount = 1;
 
-  VkDescriptorSetLayout setLayouts[] = { g_RenderState.GlobalSetLayout, g_RenderState.ObjectSetLayout };
+	//default depthtesting
+	pipelineBuilder.DepthStencil = vk::init::depth_stencil_create_info(true, true, VK_COMPARE_OP_GREATER_OR_EQUAL);
 
-  mesh_pipeline_layout_info.setLayoutCount = 2;
-  mesh_pipeline_layout_info.pSetLayouts = setLayouts;
+	//build blit pipeline
+	pipelineBuilder.SetShaders(blitEffect);
 
-  VK_CHECK(vkCreatePipelineLayout(g_PlatformState.Device, &mesh_pipeline_layout_info, nullptr, &g_RenderState.MeshPipelineLayout));
+	//blit pipeline uses hardcoded triangle so no need for vertex input
+	pipelineBuilder.ClearVertexInput();
 
-  VkPipelineLayoutCreateInfo textured_pipeline_layout_info = mesh_pipeline_layout_info;
-    
-  VkDescriptorSetLayout texturedSetLayouts[] = { g_RenderState.GlobalSetLayout, g_RenderState.ObjectSetLayout, g_RenderState.SingleTextureSetLayout };
+	pipelineBuilder.DepthStencil = vk::init::depth_stencil_create_info(false, false, VK_COMPARE_OP_ALWAYS);
 
-  textured_pipeline_layout_info.setLayoutCount = 3;
-  textured_pipeline_layout_info.pSetLayouts = texturedSetLayouts;
-
-  VkPipelineLayout texturedPipeLayout;
-  VK_CHECK(vkCreatePipelineLayout(g_PlatformState.Device, &textured_pipeline_layout_info, nullptr, &texturedPipeLayout));
-
-  g_PipelineBuilder.ShaderStages.clear();
-  g_PipelineBuilder.ShaderStages.push_back(vk::init::pipeline_shader_stage_create_info(VK_SHADER_STAGE_VERTEX_BIT, triangleVertexShader));
-  g_PipelineBuilder.ShaderStages.push_back(vk::init::pipeline_shader_stage_create_info(VK_SHADER_STAGE_FRAGMENT_BIT, triangleFragShader));
-
-  g_PipelineBuilder.VertexInputInfo = vk::init::vertex_input_state_create_info();
-  
-  g_PipelineBuilder.InputAssembly = vk::init::input_assembly_create_info(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-
-  g_PipelineBuilder.Viewport.x = 0.0f;
-  g_PipelineBuilder.Viewport.y = 0.0f;
-  g_PipelineBuilder.Viewport.width = (float)g_PlatformState.WindowExtent.width;
-  g_PipelineBuilder.Viewport.height = (float)g_PlatformState.WindowExtent.height;
-  g_PipelineBuilder.Viewport.minDepth = 0.0f;
-  g_PipelineBuilder.Viewport.maxDepth = 1.0f;
-  
-  g_PipelineBuilder.Scissor.offset = { 0, 0 };
-  g_PipelineBuilder.Scissor.extent = g_PlatformState.WindowExtent;
-
-  g_PipelineBuilder.Rasterizer = vk::init::rasterization_state_create_info(VK_POLYGON_MODE_FILL);
-  g_PipelineBuilder.Multisampling = vk::init::multisampling_state_create_info();
-  g_PipelineBuilder.ColorBlendAttachment = vk::init::color_blend_attachment_state();
-  g_PipelineBuilder.PipelineLayout = g_RenderState.MeshPipelineLayout;
-  g_PipelineBuilder.DepthStencil = vk::init::depth_stencil_create_info(true, true, VK_COMPARE_OP_LESS_OR_EQUAL);
-
-  g_RenderState.TrianglePipeline = BuildPipeline(g_PlatformState.Device, g_RenderState.RenderPass);
-
-  g_PipelineBuilder.ShaderStages.clear();
-  g_PipelineBuilder.ShaderStages.push_back(vk::init::pipeline_shader_stage_create_info(VK_SHADER_STAGE_VERTEX_BIT, redTriangleVertexShader));
-  g_PipelineBuilder.ShaderStages.push_back(vk::init::pipeline_shader_stage_create_info(VK_SHADER_STAGE_FRAGMENT_BIT, redTriangleFragShader));
-
-  g_RenderState.RedTrianglePipeline = BuildPipeline(g_PlatformState.Device, g_RenderState.RenderPass);
-  
-  //
-
-  VertexInputDescription vertexDescription = Vertex::get_vertex_description();
-
-  g_PipelineBuilder.VertexInputInfo.pVertexAttributeDescriptions = vertexDescription.Attributes.data();
-  g_PipelineBuilder.VertexInputInfo.vertexAttributeDescriptionCount = (u32)vertexDescription.Attributes.size();
-
-  g_PipelineBuilder.VertexInputInfo.pVertexBindingDescriptions = vertexDescription.Bindings.data();
-  g_PipelineBuilder.VertexInputInfo.vertexBindingDescriptionCount = (u32)vertexDescription.Bindings.size();
-
-  g_PipelineBuilder.ShaderStages.clear();
-    
-  g_PipelineBuilder.ShaderStages.push_back(vk::init::pipeline_shader_stage_create_info(VK_SHADER_STAGE_VERTEX_BIT, meshVertShader));
-  g_PipelineBuilder.ShaderStages.push_back(vk::init::pipeline_shader_stage_create_info(VK_SHADER_STAGE_FRAGMENT_BIT, colorMeshFragShader));
-
-  g_RenderState.MeshPipeline = BuildPipeline(g_PlatformState.Device, g_RenderState.RenderPass);
-
-  CreateMaterial(g_RenderState.MeshPipeline, g_RenderState.MeshPipelineLayout, "defaultmesh");
-
-  g_PipelineBuilder.ShaderStages.clear();
-  g_PipelineBuilder.ShaderStages.push_back(vk::init::pipeline_shader_stage_create_info(VK_SHADER_STAGE_VERTEX_BIT, meshVertShader));
-  g_PipelineBuilder.ShaderStages.push_back(vk::init::pipeline_shader_stage_create_info(VK_SHADER_STAGE_FRAGMENT_BIT, texturedMeshFragShader));
-
-  g_PipelineBuilder.PipelineLayout = texturedPipeLayout;
-  VkPipeline texPipeline = BuildPipeline(g_PlatformState.Device, g_RenderState.RenderPass);
-  CreateMaterial(texPipeline, texturedPipeLayout, "texturedmesh");
-
-  vkDestroyShaderModule(g_PlatformState.Device, meshVertShader, nullptr);
-  vkDestroyShaderModule(g_PlatformState.Device, redTriangleVertexShader, nullptr);
-  vkDestroyShaderModule(g_PlatformState.Device, redTriangleFragShader, nullptr);
-  vkDestroyShaderModule(g_PlatformState.Device, triangleFragShader, nullptr);
-  vkDestroyShaderModule(g_PlatformState.Device, triangleVertexShader, nullptr);
-  vkDestroyShaderModule(g_PlatformState.Device, colorMeshFragShader, nullptr);
-
-  g_RenderState.MainDeletionQueue.push_function([=]()
+	g_RenderState.BlitPipeline = pipelineBuilder.BuildPipeline(g_RenderState.CopyPass);
+	g_RenderState.BlitLayout = blitEffect->BuiltLayout;
+	
+	g_RenderState.MainDeletionQueue.push_function([=]()
   {
-    vkDestroyPipeline(g_PlatformState.Device, g_RenderState.RedTrianglePipeline, nullptr);
-    vkDestroyPipeline(g_PlatformState.Device, g_RenderState.TrianglePipeline, nullptr);
-    vkDestroyPipeline(g_PlatformState.Device, g_RenderState.MeshPipeline, nullptr);
+		//vkDestroyPipeline(_device, meshPipeline, nullptr);
+		vkDestroyPipeline(g_PlatformState.Device, g_RenderState.BlitPipeline, nullptr);
+	});
 
-    vkDestroyPipelineLayout(g_PlatformState.Device, g_RenderState.MeshPipelineLayout, nullptr);
-  });
+
+	//load the compute shaders
+	LoadComputeShader(ShaderPath("indirect_cull.comp.spv").c_str(), g_RenderState.CullPipeline, g_RenderState.CullLayout);
+
+	LoadComputeShader(ShaderPath("depthReduce.comp.spv").c_str(), g_RenderState.DepthReducePipeline, g_RenderState.DepthReduceLayout);
+
+	LoadComputeShader(ShaderPath("sparse_upload.comp.spv").c_str(), g_RenderState.SparseUploadPipeline, g_RenderState.SparseUploadLayout);
 }
 
-internal Material*
+internal vk::util::material*
 GetMaterial(const std::string& name)
 {
   auto it = g_RenderState.Materials.find(name);
@@ -1084,6 +1738,9 @@ internal void
 LoadMeshes()
 {
   Mesh ObjMesh;
+
+  ObjMesh.Bounds.Valid = false;
+
   ObjMesh.LoadFromObj("data/models/Spaceship.obj");
 
   UploadMesh(ObjMesh);
@@ -1091,59 +1748,266 @@ LoadMeshes()
   g_RenderState.Meshes["ship"] = ObjMesh;
 }
 
+bool
+LoadImageToCache(const char* name, const char* path)
+{
+	// ZoneScopedNC("Load Texture", tracy::Color::Yellow);
+	Texture newtex;
+
+	if (g_RenderState.LoadedTextures.find(name) != g_RenderState.LoadedTextures.end()) return true;
+
+	// bool result = vk::util::LoadImageFromAsset(*this, path, newtex.image);
+
+  newtex.Image = vk::util::load_image_from_asset(path);
+  
+  VkImageViewCreateInfo imageinfo = vk::init::imageview_create_info(VK_FORMAT_R8G8B8A8_UNORM, newtex.Image.Image, VK_IMAGE_ASPECT_COLOR_BIT);
+  vkCreateImageView(g_PlatformState.Device, &imageinfo, nullptr, &newtex.ImageView);
+
+  g_RenderState.LoadedTextures[name] = newtex;
+
+	// if (!result)
+	// {
+	// 	// LOG_ERROR("Error When texture {} at path {}", name, path);
+	// 	return false;
+	// }
+	// else
+  // {
+	// 	// LOG_SUCCESS("Loaded texture {} at path {}", name, path);
+	// }
+
+	newtex.ImageView = newtex.Image.DefaultView;
+	//VkImageViewCreateInfo imageinfo = vkinit::imageview_create_info(VK_FORMAT_R8G8B8A8_UNORM, newtex.image._image, VK_IMAGE_ASPECT_COLOR_BIT);
+	//imageinfo.subresourceRange.levelCount = newtex.image.mipLevels;
+	//vkCreateImageView(_device, &imageinfo, nullptr, &newtex.imageView);
+
+	g_RenderState.LoadedTextures[name] = newtex;
+
+	return true;
+}
+
 internal void
 LoadImages()
 {
-  Texture boxColor = {};
+  // Texture boxColor = {};
   
-  // boxColor.Image = vk::util::load_image_from_file("data/models/Spaceship_color.jpg");
-  boxColor.Image = vk::util::load_image_from_asset("data/models/assets_export/Spaceship_color.tx");
+  // // boxColor.Image = vk::util::load_image_from_file("data/models/Spaceship_color.jpg");
+  // boxColor.Image = vk::util::load_image_from_asset("data/models/assets_export/Spaceship_color.tx");
   
-  VkImageViewCreateInfo imageinfo = vk::init::imageview_create_info(VK_FORMAT_R8G8B8A8_UNORM, boxColor.Image.Image, VK_IMAGE_ASPECT_COLOR_BIT);
-  vkCreateImageView(g_PlatformState.Device, &imageinfo, nullptr, &boxColor.ImageView);
+  // VkImageViewCreateInfo imageinfo = vk::init::imageview_create_info(VK_FORMAT_R8G8B8A8_UNORM, boxColor.Image.Image, VK_IMAGE_ASPECT_COLOR_BIT);
+  // vkCreateImageView(g_PlatformState.Device, &imageinfo, nullptr, &boxColor.ImageView);
 
-  g_RenderState.LoadedTextures["box_color"] = boxColor;
+  // g_RenderState.LoadedTextures["box_color"] = boxColor;
+
+  LoadImageToCache("box_color", "data/models/assets_export/Spaceship_color.tx");
+}
+
+bool
+LoadPrefab(const char* path, glm::mat4 root)
+{
+	int rng = rand();
+
+	VkSamplerCreateInfo samplerInfo = vk::init::sampler_create_info(VK_FILTER_LINEAR);
+	samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+
+	VkSampler smoothSampler;
+	vkCreateSampler(g_PlatformState.Device, &samplerInfo, nullptr, &smoothSampler);
+ 
+
+	std::vector<MeshObject> prefab_renderables;
+
+	prefab_renderables.reserve(1);
+
+	
+		
+    //########################################################################
+
+  if (!GetMesh("ship"))
+  {
+    Mesh mesh{};
+    // mesh.load_from_meshasset(asset_path(v.mesh_path).c_str());
+    mesh.LoadFromObj("data/models/Spaceship.obj");
+
+    UploadMesh(mesh);
+
+    g_RenderState.Meshes["ship"] = mesh;
+  }
+
+  auto materialName = "mat"; // v.material_path.c_str();
+                             //load material
+
+  vk::util::material *objectMaterial = g_RenderState.MaterialSystem->GetMaterial(materialName);
+
+  if (!objectMaterial)
+  {
+    vk::util::sampled_texture tex;
+
+    tex.View = g_RenderState.LoadedTextures["box_color"].ImageView;
+
+    tex.Sampler = g_RenderState.SmoothSampler;
+
+    vk::util::material_data info;
+    info.Parameters = nullptr;
+
+    // if (material.Transparency == assets::TransparencyMode::Transparent)
+    // {
+    //   info.baseTemplate = "texturedPBR_transparent";
+    // }
+    // else
+    {
+      info.BaseTemplate = "texturedPBR_opaque";
+    }
+
+    info.Textures.push_back(tex);
+
+    objectMaterial = g_RenderState.MaterialSystem->BuildMaterial(materialName, info, *g_RenderState.DescriptorLayoutCache, *g_RenderState.DescriptorAllocator);
+
+    if (!objectMaterial)
+    {
+      logger::err("Error When building material");
+      // LOG_ERROR("Error When building material {}", v.material_path);
+    }
+  }
+
+  //########################################################################
+
+  MeshObject loadmesh;
+  //transparent objects will be invisible
+
+  loadmesh.bDrawForwardPass = true;
+  loadmesh.bDrawShadowPass = true;
+
+  //glm::mat4 nodematrix{1.f};
+
+  // auto matrixIT = node_worldmats.find(k);
+  // if (matrixIT != node_worldmats.end())
+  // {
+  //   auto nm = (*matrixIT).second;
+  //   memcpy(&nodematrix, &nm, sizeof(glm::mat4));
+  // }
+
+  loadmesh.Mesh = GetMesh("ship");
+  loadmesh.TransformMatrix = root;//nodematrix;
+  loadmesh.Material = objectMaterial;
+
+  // RefreshRenderbounds(&loadmesh);
+
+  //sort key from location
+  // int32_t lx = int(loadmesh.Bounds.origin.x / 10.f);
+  // int32_t ly = int(loadmesh.Bounds.origin.y / 10.f);
+
+  //uint32_t key = uint32_t(std::hash<int32_t>()(lx) ^ std::hash<int32_t>()(ly ^ 1337));
+
+  // loadmesh.customSortKey = 0; // rng;// key;
+
+  prefab_renderables.push_back(loadmesh);
+  //_renderables.push_back(loadmesh);
+
+  g_RenderState.RenderScene->RegisterObjectBatch(prefab_renderables.data(), static_cast<u32>(prefab_renderables.size()));
+
+	return true;
 }
 
 internal void
 InitScene()
 {
-  RenderObject ship;
-  ship.Mesh = GetMesh("ship");
-  ship.Material = GetMaterial("texturedmesh");
-  ship.TransformMatrix = glm::mat4{ 1.0f };
+  // RenderObject ship;
+  // ship.Mesh = GetMesh("ship");
+  // ship.Material = GetMaterial("texturedmesh");
+  // ship.TransformMatrix = glm::mat4{ 1.0f };
 
-  g_RenderState.Renderables.push_back(ship);
+  // g_RenderState.Renderables.push_back(ship);
 
-  Material* texturedMat =  GetMaterial("texturedmesh");
+  // Material* texturedMat =  GetMaterial("texturedmesh");
 
-  VkDescriptorSetAllocateInfo allocInfo = {};
-  allocInfo.pNext = nullptr;
-  allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-  allocInfo.descriptorPool = g_RenderState.DescriptorPool;
-  allocInfo.descriptorSetCount = 1;
-  allocInfo.pSetLayouts = &g_RenderState.SingleTextureSetLayout;
+  // VkDescriptorSetAllocateInfo allocInfo = {};
+  // allocInfo.pNext = nullptr;
+  // allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  // allocInfo.descriptorPool = g_RenderState.DescriptorPool;
+  // allocInfo.descriptorSetCount = 1;
+  // allocInfo.pSetLayouts = &g_RenderState.SingleTextureSetLayout;
 
-  vkAllocateDescriptorSets(g_PlatformState.Device, &allocInfo, &texturedMat->TextureSet);
+  // vkAllocateDescriptorSets(g_PlatformState.Device, &allocInfo, &texturedMat->TextureSet);
+
+  // VkSamplerCreateInfo samplerInfo = vk::init::sampler_create_info(VK_FILTER_NEAREST);
+
+  // VkSampler blockySampler;
+  // vkCreateSampler(g_PlatformState.Device, &samplerInfo, nullptr, &blockySampler);
+
+  // g_RenderState.MainDeletionQueue.push_function([=]()
+  // {
+  //   vkDestroySampler(g_PlatformState.Device, blockySampler, nullptr);
+  // });
+
+  // VkDescriptorImageInfo imageBufferInfo;
+  // imageBufferInfo.sampler = blockySampler;
+  // imageBufferInfo.imageView = g_RenderState.LoadedTextures["box_color"].ImageView;
+  // imageBufferInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+  // VkWriteDescriptorSet texture1 = vk::init::write_descriptor_image(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, texturedMat->TextureSet, &imageBufferInfo, 0);
+
+  // vkUpdateDescriptorSets(g_PlatformState.Device, 1, &texture1, 0, nullptr);
 
   VkSamplerCreateInfo samplerInfo = vk::init::sampler_create_info(VK_FILTER_NEAREST);
 
   VkSampler blockySampler;
-  vkCreateSampler(g_PlatformState.Device, &samplerInfo, nullptr, &blockySampler);
+	vkCreateSampler(g_PlatformState.Device, &samplerInfo, nullptr, &blockySampler);
 
-  g_RenderState.MainDeletionQueue.push_function([=]()
+  samplerInfo = vk::init::sampler_create_info(VK_FILTER_LINEAR);
+
+	samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+	//info.anisotropyEnable = true;
+	samplerInfo.mipLodBias = 2;
+	samplerInfo.maxLod = 30.f;
+	samplerInfo.minLod = 3;
+	VkSampler smoothSampler;
+
+	vkCreateSampler(g_PlatformState.Device, &samplerInfo, nullptr, &smoothSampler);
+
   {
-    vkDestroySampler(g_PlatformState.Device, blockySampler, nullptr);
-  });
+		vk::util::material_data texturedInfo;
+		texturedInfo.BaseTemplate = "texturedPBR_opaque";
+		texturedInfo.Parameters = nullptr;
 
-  VkDescriptorImageInfo imageBufferInfo;
-  imageBufferInfo.sampler = blockySampler;
-  imageBufferInfo.imageView = g_RenderState.LoadedTextures["box_color"].ImageView;
-  imageBufferInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		vk::util::sampled_texture whiteTex;
+		whiteTex.Sampler = smoothSampler;
+		whiteTex.View = g_RenderState.LoadedTextures["box_color"].ImageView;
 
-  VkWriteDescriptorSet texture1 = vk::init::write_descriptor_image(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, texturedMat->TextureSet, &imageBufferInfo, 0);
+		texturedInfo.Textures.push_back(whiteTex);
 
-  vkUpdateDescriptorSets(g_PlatformState.Device, 1, &texture1, 0, nullptr);
+		vk::util::material* newmat = g_RenderState.MaterialSystem->BuildMaterial("textured", texturedInfo, *g_RenderState.DescriptorLayoutCache, *g_RenderState.DescriptorAllocator);
+	}
+	{
+		vk::util::material_data matinfo;
+		matinfo.BaseTemplate = "texturedPBR_opaque";
+		matinfo.Parameters = nullptr;
+	
+		vk::util::sampled_texture whiteTex;
+		whiteTex.Sampler = smoothSampler;
+		whiteTex.View = g_RenderState.LoadedTextures["box_color"].ImageView;
+
+		matinfo.Textures.push_back(whiteTex);
+
+		vk::util::material* newmat = g_RenderState.MaterialSystem->BuildMaterial("default", matinfo, *g_RenderState.DescriptorLayoutCache, *g_RenderState.DescriptorAllocator);
+	}
+
+  int dimHelmets = 1;
+	for (int x = -dimHelmets; x <= dimHelmets; x++)
+  {
+		for (int y = -dimHelmets; y <= dimHelmets; y++)
+    {
+			glm::mat4 translation = glm::translate(glm::mat4{ 1.0 }, glm::vec3(x * 5, 10, y * 5));
+			glm::mat4 scale = glm::scale(glm::mat4{ 1.0 }, glm::vec3(10));
+	
+			//load_prefab(asset_path("FlightHelmet/FlightHelmet.pfb").c_str(),(translation * scale));
+      LoadPrefab("", (translation * scale));
+		}
+	}
+
+	//glm::mat4 sponzaMatrix = glm::scale(glm::mat4{ 1.0 }, glm::vec3(1));;
+	
+	//glm::mat4 unrealFixRotation = glm::rotate(glm::radians(-90.f), glm::vec3{ 1,0,0 });
+
+
 }
 
 internal void
@@ -1217,7 +2081,7 @@ Init()
   InitCommands();
   InitSyncStructures();
   InitDescriptors();
-  InitDefaultRenderpass();
+  //InitDefaultRenderpass();
   InitFramebuffers();
   InitPipelines();
 
@@ -1229,27 +2093,61 @@ Init()
 }
 
 static render_scene g_RenderScene;
+static vk::shader::shader_cache g_ShaderCache;
 
 internal void
 Init2()
 {
+
+  g_RenderState.Meshes.reserve(1000);
+
   g_RenderState.RenderScene = &g_RenderScene;
 
-  g_RenderState.RenderScene.Init();
+  g_RenderState.ShaderCache = &g_ShaderCache;
 
-  InitSwapchain();
-  InitCommands();
-  InitSyncStructures();
-  InitDescriptors();
-  InitDefaultRenderpass();
-  InitFramebuffers();
-  InitPipelines();
+  g_RenderState.RenderScene->Init();
 
-  LoadImages();
-  LoadMeshes();
-  InitScene();
+  InitSwapchain(); // +
 
-  InitImGui();
+  InitForwardRenderpass(); // +/-
+	InitCopyRenderpass(); // +/-
+	InitShadowRenderpass(); // +/-
+
+  InitFramebuffers(); // +/-
+
+  InitCommands(); // +
+
+  InitSyncStructures(); // +
+
+  InitDescriptors(); // +
+
+  //InitDefaultRenderpass();
+
+  InitPipelines(); // +
+
+  //
+
+  LoadImages(); // +
+
+  LoadMeshes(); // +
+
+  InitScene(); // +
+
+  InitImGui(); // +?
+
+  g_RenderState.RenderScene->BuildBatches();
+
+	g_RenderState.RenderScene->MergeMeshes();
+
+	//everything went fine
+	g_RenderState.IsInitialized = true;
+
+	g_RenderState.Camera = {};
+	g_RenderState.Camera.Position = { 0.f,6.f,5.f };
+
+	g_RenderState.MainLight.lightPosition = { 0,0,0 };
+	g_RenderState.MainLight.lightDirection = glm::vec3(0.3, -1, 0.3);
+	g_RenderState.MainLight.shadowExtent = { 100 ,100 ,100 };
 }
 
 internal void
@@ -1275,21 +2173,51 @@ Resize()
 internal void
 Cleanup()
 {
-  vkDeviceWaitIdle(g_PlatformState.Device);
+  // vkDeviceWaitIdle(g_PlatformState.Device);
 
-  g_RenderState.MainDeletionQueue.flush();
+  // g_RenderState.MainDeletionQueue.flush();
 
-  vkDeviceWaitIdle(g_PlatformState.Device);
+  // vkDeviceWaitIdle(g_PlatformState.Device);
 
-  vkDestroySurfaceKHR(g_PlatformState.Instance, g_PlatformState.Surface, nullptr);
+  // vkDestroySurfaceKHR(g_PlatformState.Instance, g_PlatformState.Surface, nullptr);
 
-  vmaDestroyAllocator(g_Allocator);
+  // vmaDestroyAllocator(g_Allocator);
 
-  vkDestroyDevice(g_PlatformState.Device, nullptr);
+  // vkDestroyDevice(g_PlatformState.Device, nullptr);
 
-  vkb::destroy_debug_utils_messenger(g_PlatformState.Instance, g_PlatformState.DebugMessenger);
+  // vkb::destroy_debug_utils_messenger(g_PlatformState.Instance, g_PlatformState.DebugMessenger);
 
-  vkDestroyInstance(g_PlatformState.Instance, nullptr);
+  // vkDestroyInstance(g_PlatformState.Instance, nullptr);
+
+  if (g_RenderState.IsInitialized)
+  {
+
+		//make sure the gpu has stopped doing its things
+		for (auto& frame : g_RenderState.Frames)
+		{
+			vkWaitForFences(g_PlatformState.Device, 1, &frame._renderFence, true, 1000000000);
+		}
+
+		g_RenderState.MainDeletionQueue.flush();
+
+		for (auto& frame : g_RenderState.Frames)
+		{
+			frame.DynamicDescriptorAllocator->Cleanup();
+		}
+
+		g_RenderState.DescriptorAllocator->Cleanup();
+		g_RenderState.DescriptorLayoutCache->Cleanup();
+
+		vkDestroySurfaceKHR(g_PlatformState.Instance, g_PlatformState.Surface, nullptr);
+
+    vmaDestroyAllocator(g_Allocator);
+
+		vkDestroyDevice(g_PlatformState.Device, nullptr);
+
+    vkb::destroy_debug_utils_messenger(g_PlatformState.Instance, g_PlatformState.DebugMessenger);
+
+		vkDestroyInstance(g_PlatformState.Instance, nullptr);
+	}
 }
 
 }

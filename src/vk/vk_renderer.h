@@ -18,6 +18,17 @@
 
 struct render_scene;
 
+namespace vk::shader
+{
+struct shader_cache;
+}
+
+namespace vk::util
+{
+struct material_system;
+struct material;
+}
+
 namespace vk::renderer
 {
 
@@ -44,13 +55,13 @@ struct DeletionQueue
   }
 };
 
-struct
-Material
-{
-  VkDescriptorSet TextureSet {VK_NULL_HANDLE};
-  VkPipeline Pipeline;
-  VkPipelineLayout PipelineLayout;
-};
+// struct
+// Material
+// {
+//   VkDescriptorSet TextureSet {VK_NULL_HANDLE};
+//   VkPipeline Pipeline;
+//   VkPipelineLayout PipelineLayout;
+// };
 
 struct
 Texture
@@ -70,7 +81,7 @@ struct
 RenderObject
 {
   Mesh* Mesh;
-  Material* Material;
+  vk::util::material* Material;
   glm::mat4 TransformMatrix;
 };
 
@@ -126,7 +137,7 @@ FrameData
 
   vk::util::push_buffer DynamicData;
 
-  // AllocatedBufferUntyped debugOutputBuffer;
+  allocated_buffer_untyped DebugOutputBuffer;
 
   VkDescriptorSet ObjectDescriptor;
   VkDescriptorSet GlobalDescriptor;
@@ -229,7 +240,12 @@ vulkan_render_state
   u32 GraphicsQueueFamily;
 
   VkRenderPass RenderPass;
+  VkRenderPass ShadowPass;
+	VkRenderPass CopyPass;
+
   std::vector<VkFramebuffer> Framebuffers;
+
+  
 
   i32 FrameNumber = 0;
   FrameData Frames[FRAME_OVERLAP];
@@ -265,8 +281,12 @@ vulkan_render_state
 
   // Renderables
   std::vector<RenderObject> Renderables;
-  std::unordered_map<std::string, Material> Materials;
+  std::unordered_map<std::string, vk::util::material> Materials;
   std::unordered_map<std::string, Mesh> Meshes;
+  std::unordered_map<std::string, Texture> LoadedTextures;
+  // std::unordered_map<std::string, assets::PrefabInfo*> _prefabCache;
+
+  vk::shader::shader_cache* ShaderCache;
 
   // Scene
   GPUSceneData SceneParameters;
@@ -274,9 +294,6 @@ vulkan_render_state
 
   // Context
   upload_context UploadContext;
-
-  // Textures
-  std::unordered_map<std::string, Texture> LoadedTextures;
 
   // Deletion queue
   DeletionQueue MainDeletionQueue;
@@ -305,28 +322,43 @@ vulkan_render_state
   VkPipeline SparseUploadPipeline;
 	VkPipelineLayout SparseUploadLayout;
 
+  VkPipeline BlitPipeline;
+	VkPipelineLayout BlitLayout;
+
   player_camera Camera;
   DirectionalLight MainLight;
 
   allocated_image ShadowImage;
+  VkExtent2D ShadowExtent{ 1024*4,1024*4 };
+
   VkSampler ShadowSampler;
 
   EngineStats stats;
+
+  VkFormat RenderFormat;
+	allocated_image RawRenderImage;
+  VkSampler SmoothSampler;
+  VkFramebuffer ForwardFramebuffer;
+	VkFramebuffer ShadowFramebuffer;
+
+  vk::util::material_system* MaterialSystem;
+
+  bool IsInitialized = false;
 };
 
-struct
-pipeline_builder
-{
-  std::vector<VkPipelineShaderStageCreateInfo> ShaderStages;
-  VkPipelineVertexInputStateCreateInfo VertexInputInfo;
-  VkPipelineInputAssemblyStateCreateInfo InputAssembly;
-  VkViewport Viewport;
-  VkRect2D Scissor;
-  VkPipelineRasterizationStateCreateInfo Rasterizer;
-  VkPipelineColorBlendAttachmentState ColorBlendAttachment;
-  VkPipelineMultisampleStateCreateInfo Multisampling;
-  VkPipelineLayout PipelineLayout;
-  VkPipelineDepthStencilStateCreateInfo DepthStencil;
-};
+// struct
+// pipeline_builder
+// {
+//   std::vector<VkPipelineShaderStageCreateInfo> ShaderStages;
+//   VkPipelineVertexInputStateCreateInfo VertexInputInfo;
+//   VkPipelineInputAssemblyStateCreateInfo InputAssembly;
+//   VkViewport Viewport;
+//   VkRect2D Scissor;
+//   VkPipelineRasterizationStateCreateInfo Rasterizer;
+//   VkPipelineColorBlendAttachmentState ColorBlendAttachment;
+//   VkPipelineMultisampleStateCreateInfo Multisampling;
+//   VkPipelineLayout PipelineLayout;
+//   VkPipelineDepthStencilStateCreateInfo DepthStencil;
+// };
 
 }

@@ -1,5 +1,5 @@
 
-#include <spirv_reflect.h>
+#include <spirv_reflect.c>
 
 struct shader_module
 {

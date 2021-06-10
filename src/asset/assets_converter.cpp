@@ -14,6 +14,7 @@ namespace fs = std::filesystem;
 
 #include "asset.h"
 #include "texture_asset.h"
+#include "prefab_asset.h"
 
 struct
 converter_state

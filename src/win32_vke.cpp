@@ -279,7 +279,7 @@ WinMain(HINSTANCE Instance,
 
       HDC DeviceContext = GetDC(WindowHendle);
       // DRAW
-      vk::renderer::Draw();
+      vk::renderer::Draw2();
       // SWAP
       SwapBuffers(DeviceContext);
       ReleaseDC(WindowHendle, DeviceContext);
