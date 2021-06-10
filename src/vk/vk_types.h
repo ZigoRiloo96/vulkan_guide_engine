@@ -27,7 +27,14 @@ allocated_buffer_untyped
 	VmaAllocation Allocation{};
 	VkDeviceSize Size{0};
 	VkDescriptorBufferInfo
-  GetInfo(VkDeviceSize offset = 0);
+  GetInfo(VkDeviceSize offset = 0)
+	{
+		VkDescriptorBufferInfo info;
+		info.buffer = Buffer;
+		info.offset = offset;
+		info.range = Size;
+		return info;
+	}
 };
 
 template<typename T>

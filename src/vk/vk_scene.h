@@ -299,7 +299,7 @@ render_scene
   }
 
   void
-  FillInstanceArray(gpu_instance* data, mesh_pass& pass)
+  FillInstancesArray(gpu_instance* data, mesh_pass& pass)
   {
     //ZoneScopedNC("Fill Instances", tracy::Color::Red);
     int dataIndex = 0;

@@ -1,5 +1,4 @@
 
-
 #include "vk_renderer.h"
 
 namespace vk::renderer
@@ -12,7 +11,17 @@ namespace vk::renderer
   global_variable VmaAllocator g_Allocator;
 
   allocated_buffer_untyped
-  CreateBuffer(u64 allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage, VkMemoryPropertyFlags requiredFlags = 0);
+  CreateBuffer(u64 allocSize,
+               VkBufferUsageFlags usage,
+               VmaMemoryUsage memoryUsage,
+               VkMemoryPropertyFlags requiredFlags = 0);
+
+  void
+  ReallocateBuffer(allocated_buffer_untyped& buffer,
+                   size_t allocSize,
+                   VkBufferUsageFlags usage,
+                   VmaMemoryUsage memoryUsage,
+                   VkMemoryPropertyFlags required_flags = 0);
 
   void
   ImmediateSubmit(std::function<void(VkCommandBuffer cmd)>&& function);
@@ -26,15 +35,27 @@ namespace vk::renderer
   {
   	return "data/shaders/" + std::string(path);
   }
+
+  template <typename T> T*
+  MapBuffer(allocated_buffer<T> &buffer)
+  {
+    void *data;
+    vmaMapMemory(g_Allocator, buffer.Allocation, &data);
+    return (T*)data;
+  }
+
+  void
+  UnmapBuffer(allocated_buffer_untyped &buffer)
+  {
+    vmaUnmapMemory(g_Allocator, buffer.Allocation);
+  }
 }
 
 #include "asset/asset.h"
 #include "asset/texture_asset.h"
 
 #include "vk_shaders.h"
-
 #include "../material_system.h"
-
 #include "vk_scene.h"
 
 #include "vk_textures.h"
@@ -45,7 +66,10 @@ namespace vk::renderer
 {
 
 allocated_buffer_untyped
-CreateBuffer(u64 allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage, VkMemoryPropertyFlags requiredFlags)
+CreateBuffer(u64 allocSize,
+             VkBufferUsageFlags usage,
+             VmaMemoryUsage memoryUsage,
+             VkMemoryPropertyFlags requiredFlags)
 {
   VkBufferCreateInfo bufferInfo = {};
   bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -69,6 +93,23 @@ CreateBuffer(u64 allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage
   newBuffer.Size = allocSize;
 
   return newBuffer;
+}
+
+void
+ReallocateBuffer(allocated_buffer_untyped& buffer,
+                 size_t allocSize,
+                 VkBufferUsageFlags usage,
+                 VmaMemoryUsage memoryUsage,
+                 VkMemoryPropertyFlags required_flags)
+{
+  allocated_buffer_untyped newBuffer = CreateBuffer(allocSize, usage, memoryUsage, required_flags);
+
+	g_RenderState.GetCurrentFrame().FrameDeletionQueue.push_function([=]()
+  {
+		vmaDestroyBuffer(g_Allocator, buffer.Buffer, buffer.Allocation);
+	});
+
+	buffer = newBuffer;
 }
 
 u64
@@ -156,7 +197,8 @@ CompactDraws(RenderObject* objects,
 }
 
 internal vulkan_platform_state
-Win32InitVulkan(HWND WindowWin32, HINSTANCE InstanceWin32)
+Win32InitVulkan(HWND WindowWin32,
+                HINSTANCE InstanceWin32)
 {
   g_PlatformState.Win32NativeWindow = WindowWin32;
 
@@ -526,7 +568,9 @@ InitDescriptors()
 }
 
 internal void
-DrawObjects(VkCommandBuffer cmd, RenderObject* first, u64 count)
+DrawObjects(VkCommandBuffer cmd,
+            RenderObject* first,
+            u64 count)
 {
   FrameData& currentFrame = g_RenderState.GetCurrentFrame();
 
@@ -646,7 +690,8 @@ DrawObjects(VkCommandBuffer cmd, RenderObject* first, u64 count)
   // }
 }
 
-void ImmediateSubmit(std::function<void(VkCommandBuffer cmd)>&& function)
+void
+ImmediateSubmit(std::function<void(VkCommandBuffer cmd)>&& function)
 {
   VkCommandBufferAllocateInfo cmdAllocInfo = vk::init::command_buffer_allocate_info(g_RenderState.UploadContext.CommandPool, 1);
 
@@ -1168,6 +1213,30 @@ InitImGui()
 internal void
 Init()
 {
+  InitSwapchain();
+  InitCommands();
+  InitSyncStructures();
+  InitDescriptors();
+  InitDefaultRenderpass();
+  InitFramebuffers();
+  InitPipelines();
+
+  LoadImages();
+  LoadMeshes();
+  InitScene();
+
+  InitImGui();
+}
+
+static render_scene g_RenderScene;
+
+internal void
+Init2()
+{
+  g_RenderState.RenderScene = &g_RenderScene;
+
+  g_RenderState.RenderScene.Init();
+
   InitSwapchain();
   InitCommands();
   InitSyncStructures();

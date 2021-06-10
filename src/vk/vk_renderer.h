@@ -1,6 +1,10 @@
 
 #include "vk_initializers.h"
 
+#include "vk_pushbuffer.h"
+
+#include "../player_camera.h"
+
 #define VK_CHECK(x)                                               \
   do                                                              \
   {                                                               \
@@ -11,6 +15,8 @@
       Assert(false);                                              \
     }                                                             \
   } while (0)
+
+struct render_scene;
 
 namespace vk::renderer
 {
@@ -95,19 +101,37 @@ GPUSceneData
 	glm::mat4 SunlightShadowMatrix;
 };
 
+struct EngineStats
+{
+	float frametime;
+	int objects;
+	int drawcalls;
+	int draws;
+	int triangles;
+};
+
 struct
 FrameData
 {
   VkSemaphore PresentSemaphore, RenderSemaphore;
-  VkFence RenderFence;  
+  VkFence RenderFence;
+
+  DeletionQueue FrameDeletionQueue;
+
   VkCommandPool CommandPool;
   VkCommandBuffer MainCommandBuffer;
 
   allocated_buffer<GPUCameraData> CameraBuffer;
   allocated_buffer<GPUObjectData> ObjectBuffer;
 
+  vk::util::push_buffer DynamicData;
+
+  // AllocatedBufferUntyped debugOutputBuffer;
+
   VkDescriptorSet ObjectDescriptor;
   VkDescriptorSet GlobalDescriptor;
+
+  vk::descriptor::allocator* DynamicDescriptorAllocator;
 };
 
 struct /*alignas(16)*/DrawCullData
@@ -149,10 +173,22 @@ struct DirectionalLight
 	glm::vec3 lightPosition;
 	glm::vec3 lightDirection;
 	glm::vec3 shadowExtent;
-	glm::mat4 get_projection();
+	glm::mat4 get_projection()
+  {
+    glm::mat4 projection = glm::orthoLH_ZO(-shadowExtent.x, shadowExtent.x, -shadowExtent.y, shadowExtent.y, -shadowExtent.z, shadowExtent.z);
+	  return projection;
+  }
+	glm::mat4 get_view()
+  {
+    glm::vec3 camPos = lightPosition;
 
-	glm::mat4 get_view();
+	  glm::vec3 camFwd = lightDirection;
+
+	  glm::mat4 view = glm::lookAt(camPos, camPos + camFwd, glm::vec3(1, 0, 0));
+	  return view;
+  }
 };
+
 struct CullParams
 {
 	glm::mat4 viewmat;
@@ -224,6 +260,7 @@ vulkan_render_state
   // Depth
   VkImageView DepthImageView;
   allocated_image DepthImage;
+  allocated_image DepthPyramid;
   VkFormat DepthFormat;
 
   // Renderables
@@ -243,6 +280,38 @@ vulkan_render_state
 
   // Deletion queue
   DeletionQueue MainDeletionQueue;
+
+  render_scene* RenderScene;
+  VkSampler DepthSampler;
+  VkImageView DepthPyramidMips[16] = {};
+
+  vk::descriptor::allocator* DescriptorAllocator;
+	vk::descriptor::cache* DescriptorLayoutCache;
+
+  VkPipeline CullPipeline;
+	VkPipelineLayout CullLayout;
+
+  std::vector<VkBufferMemoryBarrier> UploadBarriers;
+	std::vector<VkBufferMemoryBarrier> CullReadyBarriers;
+	std::vector<VkBufferMemoryBarrier> PostCullBarriers;
+
+  i32 DepthPyramidWidth;
+	i32 DepthPyramidHeight;
+	i32 DepthPyramidLevels;
+
+  VkPipeline DepthReducePipeline;
+	VkPipelineLayout DepthReduceLayout;
+
+  VkPipeline SparseUploadPipeline;
+	VkPipelineLayout SparseUploadLayout;
+
+  player_camera Camera;
+  DirectionalLight MainLight;
+
+  allocated_image ShadowImage;
+  VkSampler ShadowSampler;
+
+  EngineStats stats;
 };
 
 struct

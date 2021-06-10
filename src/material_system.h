@@ -460,7 +460,7 @@ BuildMaterial(const std::string& materialName,
 		newMat->PassSets[MeshpassType::DirectionalShadow] = VK_NULL_HANDLE;
 		newMat->Textures = info.Textures;
 
-    std::vector<vk::descriptor::builder::descriptor_bind> binds;		
+    std::vector<vk::descriptor::builder::descriptor_bind> binds;
 
 		for (u32 i = 0; i < info.Textures.size(); i++)
 		{
@@ -475,8 +475,8 @@ BuildMaterial(const std::string& materialName,
       binds.push_back( bind );
 		}
 
-		vk::descriptor::builder::BuildDescriptorSet(descriptorAllocator, descriptorLayoutCache, newMat->PassSets[MeshpassType::Forward], binds);
-    vk::descriptor::builder::BuildDescriptorSet(descriptorAllocator, descriptorLayoutCache, newMat->PassSets[MeshpassType::Transparency], binds);
+		vk::descriptor::builder::BuildDescriptorSet(descriptorAllocator, descriptorLayoutCache, newMat->PassSets[MeshpassType::Forward], binds.data());
+    vk::descriptor::builder::BuildDescriptorSet(descriptorAllocator, descriptorLayoutCache, newMat->PassSets[MeshpassType::Transparency], binds.data());
 
 		//LOG_INFO("Built New Material {}", materialName);
 		//add material to cache
