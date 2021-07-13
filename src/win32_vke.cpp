@@ -75,7 +75,9 @@ WindowProc(
   case WM_SYSKEYUP:
   case WM_KEYDOWN:
   case WM_KEYUP:
+  case WM_MOUSEMOVE:
   {
+    vk::renderer::g_RenderState.Camera.ProcessInputEvent(Message, LParam);
   } break;
 
   default:
@@ -115,6 +117,11 @@ ImGuiShowFPS(u64 avgFPS, f64 delta)
   if (ImGui::Begin("Example: Simple overlay", &fpsWindowsOpen, window_flags))
   {
     f64 mili_delta = delta * 1.0e-6;
+
+    ImGui::Text("Position: (%f, %f, %f)", vk::renderer::g_RenderState.Camera.Position.x,
+    vk::renderer::g_RenderState.Camera.Position.y,
+    vk::renderer::g_RenderState.Camera.Position.z);
+
     ImGui::Text("FPS: (%lld)", avgFPS);
 
     static f32 values[180] = {};
@@ -187,7 +194,7 @@ WinMain(HINSTANCE Instance,
 
     vk::renderer::vulkan_platform_state VulkanPlatformState = vk::renderer::Win32InitVulkan(WindowHendle, Instance);
 
-    vk::renderer::Init();
+    vk::renderer::Init2();
 
     ShowWindow(WindowHendle, SW_SHOW);
 

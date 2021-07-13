@@ -3,6 +3,8 @@
 
 #define FREEZE_SHADOWS 0
 
+struct MeshObject;
+
 namespace vk::renderer
 {
   global_variable vulkan_platform_state g_PlatformState {};
@@ -37,61 +39,7 @@ namespace vk::renderer
   	return "data/shaders/" + std::string(path);
   }
 
-  // void VulkanEngine::refresh_renderbounds(MeshObject *object)
-  // {
-  //   //dont try to update invalid bounds
-  //   if (!object->Mesh->Bounds.Valid)
-  //     return;
-
-  //   RenderBounds originalBounds = object->Mesh->Bounds;
-
-  //   //convert bounds to 8 vertices, and transform those
-  //   std::array<glm::vec3, 8> boundsVerts;
-
-  //   for (int i = 0; i < 8; i++)
-  //   {
-  //     boundsVerts[i] = originalBounds.origin;
-  //   }
-
-  //   boundsVerts[0] += originalBounds.extents * glm::vec3(1, 1, 1);
-  //   boundsVerts[1] += originalBounds.extents * glm::vec3(1, 1, -1);
-  //   boundsVerts[2] += originalBounds.extents * glm::vec3(1, -1, 1);
-  //   boundsVerts[3] += originalBounds.extents * glm::vec3(1, -1, -1);
-  //   boundsVerts[4] += originalBounds.extents * glm::vec3(-1, 1, 1);
-  //   boundsVerts[5] += originalBounds.extents * glm::vec3(-1, 1, -1);
-  //   boundsVerts[6] += originalBounds.extents * glm::vec3(-1, -1, 1);
-  //   boundsVerts[7] += originalBounds.extents * glm::vec3(-1, -1, -1);
-
-  //   //recalc max/min
-  //   glm::vec3 min{std::numeric_limits<float>().max()};
-  //   glm::vec3 max{-std::numeric_limits<float>().max()};
-
-  //   glm::mat4 m = object->transformMatrix;
-
-  //   //transform every vertex, accumulating max/min
-  //   for (int i = 0; i < 8; i++)
-  //   {
-  //     boundsVerts[i] = m * glm::vec4(boundsVerts[i], 1.f);
-
-  //     min = glm::min(boundsVerts[i], min);
-  //     max = glm::max(boundsVerts[i], max);
-  //   }
-
-  //   glm::vec3 extents = (max - min) / 2.f;
-  //   glm::vec3 origin = min + extents;
-
-  //   float max_scale = 0;
-  //   max_scale = std::max(glm::length(glm::vec3(m[0][0], m[0][1], m[0][2])), max_scale);
-  //   max_scale = std::max(glm::length(glm::vec3(m[1][0], m[1][1], m[1][2])), max_scale);
-  //   max_scale = std::max(glm::length(glm::vec3(m[2][0], m[2][1], m[2][2])), max_scale);
-
-  //   float radius = max_scale * originalBounds.radius;
-
-  //   object->bounds.extents = extents;
-  //   object->bounds.origin = origin;
-  //   object->bounds.radius = radius;
-  //   object->bounds.valid = true;
-  // }
+  void RefreshRenderbounds(MeshObject *object);
 
   template <typename T> T*
   MapBuffer(allocated_buffer<T> &buffer)
@@ -124,6 +72,62 @@ namespace vk::renderer
 
 global_variable pipeline_builder g_PipelineBuilder {};
 
+void RefreshRenderbounds(MeshObject *object)
+{
+  //dont try to update invalid bounds
+  if (!object->Mesh->Bounds.Valid)
+    return;
+
+  RenderBounds originalBounds = object->Mesh->Bounds;
+
+  //convert bounds to 8 vertices, and transform those
+  std::array<glm::vec3, 8> boundsVerts;
+
+  for (int i = 0; i < 8; i++)
+  {
+    boundsVerts[i] = originalBounds.Origin;
+  }
+
+  boundsVerts[0] += originalBounds.Extents * glm::vec3(1, 1, 1);
+  boundsVerts[1] += originalBounds.Extents * glm::vec3(1, 1, -1);
+  boundsVerts[2] += originalBounds.Extents * glm::vec3(1, -1, 1);
+  boundsVerts[3] += originalBounds.Extents * glm::vec3(1, -1, -1);
+  boundsVerts[4] += originalBounds.Extents * glm::vec3(-1, 1, 1);
+  boundsVerts[5] += originalBounds.Extents * glm::vec3(-1, 1, -1);
+  boundsVerts[6] += originalBounds.Extents * glm::vec3(-1, -1, 1);
+  boundsVerts[7] += originalBounds.Extents * glm::vec3(-1, -1, -1);
+
+  //recalc max/min
+  glm::vec3 min{std::numeric_limits<float>().max()};
+  glm::vec3 max{-std::numeric_limits<float>().max()};
+
+  glm::mat4 m = object->TransformMatrix;
+
+  //transform every vertex, accumulating max/min
+  for (int i = 0; i < 8; i++)
+  {
+    boundsVerts[i] = m * glm::vec4(boundsVerts[i], 1.f);
+
+    min = glm::min(boundsVerts[i], min);
+    max = glm::max(boundsVerts[i], max);
+  }
+
+  glm::vec3 extents = (max - min) / 2.f;
+  glm::vec3 origin = min + extents;
+
+  float max_scale = 0;
+  max_scale = std::max(glm::length(glm::vec3(m[0][0], m[0][1], m[0][2])), max_scale);
+  max_scale = std::max(glm::length(glm::vec3(m[1][0], m[1][1], m[1][2])), max_scale);
+  max_scale = std::max(glm::length(glm::vec3(m[2][0], m[2][1], m[2][2])), max_scale);
+
+  float radius = max_scale * originalBounds.Radius;
+
+  object->Bounds.Extents = extents;
+  object->Bounds.Origin = origin;
+  object->Bounds.Radius = radius;
+  object->Bounds.Valid = true;
+}
+
 void
 ReadyCullData(render_scene::mesh_pass& pass, VkCommandBuffer cmd)
 {
@@ -132,6 +136,9 @@ ReadyCullData(render_scene::mesh_pass& pass, VkCommandBuffer cmd)
 	indirectCopy.dstOffset = 0;
 	indirectCopy.size = pass.Batches.size() * sizeof(gpu_indirect_object);
 	indirectCopy.srcOffset = 0;
+
+  if (indirectCopy.size == 0) return;
+
 	vkCmdCopyBuffer(cmd, pass.ClearIndirectBuffer.Buffer, pass.DrawIndirectBuffer.Buffer, 1, &indirectCopy);
 
 	{
@@ -151,6 +158,8 @@ CreateBuffer(u64 allocSize,
              VmaMemoryUsage memoryUsage,
              VkMemoryPropertyFlags requiredFlags)
 {
+  if (!allocSize) return allocated_buffer_untyped();
+
   VkBufferCreateInfo bufferInfo = {};
   bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
   bufferInfo.pNext = nullptr;
@@ -285,7 +294,7 @@ Win32InitVulkan(HWND WindowWin32,
   vkb::InstanceBuilder builder;
   auto inst_ret = builder.set_app_name("VulkanEngine")
     .request_validation_layers(true)
-    .require_api_version(1,1,0)
+    //.require_api_version(1,1,0)
     .use_default_debug_messenger()
     .set_debug_callback(debug_callback)
     .build();
@@ -309,6 +318,7 @@ Win32InitVulkan(HWND WindowWin32,
   vkb::PhysicalDevice physicalDevice = selector
     .set_minimum_version(1,1)
     .set_surface(Surface)
+    .add_required_extension(VK_EXT_SAMPLER_FILTER_MINMAX_EXTENSION_NAME)
     .select()
     .value();
 
@@ -373,7 +383,7 @@ InitSwapchain()
 
   vkb::Swapchain vkbSwapchain = swapchainBuilder
     .use_default_format_selection()
-    .set_desired_present_mode(VK_PRESENT_MODE_IMMEDIATE_KHR) // VK_PRESENT_MODE_IMMEDIATE_KHR / VK_PRESENT_MODE_FIFO_KHR
+    .set_desired_present_mode(VK_PRESENT_MODE_MAILBOX_KHR) // VK_PRESENT_MODE_IMMEDIATE_KHR / VK_PRESENT_MODE_FIFO_KHR
     .set_desired_extent(g_PlatformState.WindowExtent.width, g_PlatformState.WindowExtent.height)
     .build()
     .value();
@@ -382,11 +392,6 @@ InitSwapchain()
   g_RenderState.SwapchainImages = vkbSwapchain.get_images().value();
   g_RenderState.SwapchainImageViews = vkbSwapchain.get_image_views().value();
   g_RenderState.SwapchainImageFormat = vkbSwapchain.image_format;
-
-  g_RenderState.MainDeletionQueue.push_function([=]()
-  {
-    vkDestroySwapchainKHR(g_PlatformState.Device, g_RenderState.Swapchain, nullptr);
-  });
 
   // render image
   {
@@ -413,6 +418,11 @@ InitSwapchain()
 
 		VK_CHECK(vkCreateImageView(g_PlatformState.Device, &dview_info, nullptr, &g_RenderState.RawRenderImage.DefaultView));
   }
+
+  g_RenderState.MainDeletionQueue.push_function([=]()
+  {
+    vkDestroySwapchainKHR(g_PlatformState.Device, g_RenderState.Swapchain, nullptr);
+  });
 
   //depth image size will match the window
 	VkExtent3D depthImageExtent =
@@ -640,7 +650,7 @@ internal void
 InitForwardRenderpass()
 {
   VkAttachmentDescription color_attachment = {};
-	color_attachment.format = g_RenderState.SwapchainImageFormat;// _renderFormat;//_swachainImageFormat;
+	color_attachment.format = g_RenderState.RenderFormat;// _renderFormat;//_swachainImageFormat;
 	color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
 	color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
 	color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -885,9 +895,11 @@ internal void
 InitDescriptors()
 {
   g_RenderState.DescriptorAllocator = new vk::descriptor::allocator {};
+  g_RenderState.DescriptorAllocator->Device = g_PlatformState.Device;
 	//_descriptorAllocator->init(_device);
 
 	g_RenderState.DescriptorLayoutCache = new vk::descriptor::cache {};
+  g_RenderState.DescriptorLayoutCache->Device = g_PlatformState.Device;
 	//g_RenderState.DescriptorLayoutCache->init(_device);
 
 	VkDescriptorSetLayoutBinding textureBind = vk::init::descriptorset_layout_binding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
@@ -906,6 +918,7 @@ InitDescriptors()
 	for (int i = 0; i < FRAME_OVERLAP; i++)
 	{
 		g_RenderState.Frames[i].DynamicDescriptorAllocator = new vk::descriptor::allocator {};
+    g_RenderState.Frames[i].DynamicDescriptorAllocator->Device = g_PlatformState.Device;
 		// g_RenderState.Frames[i].DynamicDescriptorAllocator->init(_device);
 
 		//1 megabyte of dynamic data buffer
@@ -1308,7 +1321,7 @@ CopyRenderToSwapchain(u32 swapchainImageIndex, VkCommandBuffer cmd)
 		{ 0, nullptr, &sourceImage, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT }
 	};
 
-	vk::descriptor::builder::BuildDescriptorSet(*g_RenderState.GetCurrentFrame().DynamicDescriptorAllocator, *g_RenderState.DescriptorLayoutCache, blitSet, binds);
+	vk::descriptor::builder::BuildDescriptorSet(*g_RenderState.GetCurrentFrame().DynamicDescriptorAllocator, *g_RenderState.DescriptorLayoutCache, blitSet, binds, 1);
 
 	vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_RenderState.BlitLayout, 0, 1, &blitSet, 0, nullptr);
 
@@ -1453,7 +1466,7 @@ Draw2()
   submit.signalSemaphoreCount = 1;
   submit.pSignalSemaphores = &currentFrame.RenderSemaphore;
   {
-    //ZoneScopedN("Queue Submit");
+    //ZoneScopedN("Queue Submit");     
     //submit command buffer to the queue and execute it.
     // _renderFence will now block until the graphic commands finish execution
     VK_CHECK(vkQueueSubmit(g_RenderState.GraphicsQueue, 1, &submit, currentFrame.RenderFence));
@@ -1680,58 +1693,77 @@ GetMesh(const std::string& name)
 internal void
 UploadMesh(Mesh& mesh)
 {
-  const size_t bufferSize = mesh.Vertices.size() * sizeof(Vertex);
-  VkBufferCreateInfo stagingBufferInfo = {};
-  stagingBufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-  stagingBufferInfo.pNext = nullptr;
-  stagingBufferInfo.size = bufferSize;  
-  stagingBufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  // const size_t bufferSize = mesh.Vertices.size() * sizeof(Vertex);
+  
+  const size_t vertex_buffer_size = mesh.Vertices.size() * sizeof(Vertex);
+	const size_t index_buffer_size = mesh.Indices.size() * sizeof(u32);
+	const size_t bufferSize = vertex_buffer_size + index_buffer_size;
+	//allocate vertex buffer
+
+  //allocate vertex buffer
+	VkBufferCreateInfo vertexBufferInfo = {};
+	vertexBufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	vertexBufferInfo.pNext = nullptr;
+	//this is the total size, in bytes, of the buffer we are allocating
+	vertexBufferInfo.size = vertex_buffer_size;
+	//this buffer is going to be used as a Vertex Buffer
+	vertexBufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+
+	//allocate vertex buffer
+	VkBufferCreateInfo indexBufferInfo = {};
+	indexBufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	indexBufferInfo.pNext = nullptr;
+	//this is the total size, in bytes, of the buffer we are allocating
+	indexBufferInfo.size = index_buffer_size;
+	//this buffer is going to be used as a Vertex Buffer
+	indexBufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
   VmaAllocationCreateInfo vmaAllocInfo = {};
   vmaAllocInfo.usage = VMA_MEMORY_USAGE_CPU_ONLY;
 
-  allocated_buffer_untyped stagingBuffer;
-
-  VK_CHECK(vmaCreateBuffer(g_Allocator, &stagingBufferInfo, &vmaAllocInfo,
-    &stagingBuffer.Buffer,
-    &stagingBuffer.Allocation,
-    nullptr));
-
-  void* data;
-  vmaMapMemory(g_Allocator, stagingBuffer.Allocation, &data);
-
-  memcpy(data, mesh.Vertices.data(), mesh.Vertices.size() * sizeof(Vertex));
-
-  vmaUnmapMemory(g_Allocator, stagingBuffer.Allocation);
-
-  VkBufferCreateInfo vertexBufferInfo = {};
-  vertexBufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-  vertexBufferInfo.pNext = nullptr;
-  vertexBufferInfo.size = bufferSize;
-  vertexBufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-
-  vmaAllocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+  // allocated_buffer_untyped stagingBuffer;
 
   VK_CHECK(vmaCreateBuffer(g_Allocator, &vertexBufferInfo, &vmaAllocInfo,
     &mesh.VertexBuffer.Buffer,
     &mesh.VertexBuffer.Allocation,
     nullptr));
 
-  ImmediateSubmit([=](VkCommandBuffer cmd)
-  {
-    VkBufferCopy copy;
-    copy.dstOffset = 0;
-    copy.srcOffset = 0;
-    copy.size = bufferSize;
-    vkCmdCopyBuffer(cmd, stagingBuffer.Buffer, mesh.VertexBuffer.Buffer, 1, &copy);
-  });
+  void* data;
+  vmaMapMemory(g_Allocator, mesh.VertexBuffer.Allocation, (void**)&data);
 
-  g_RenderState.MainDeletionQueue.push_function([=]()
-  {
-    vmaDestroyBuffer(g_Allocator, mesh.VertexBuffer.Buffer, mesh.VertexBuffer.Allocation);
-  });
+  memcpy(data, mesh.Vertices.data(), vertex_buffer_size);
 
-  vmaDestroyBuffer(g_Allocator, stagingBuffer.Buffer, stagingBuffer.Allocation);
+  vmaUnmapMemory(g_Allocator, mesh.VertexBuffer.Allocation);
+
+  if (index_buffer_size != 0)
+	{
+		//allocate the buffer
+		VK_CHECK(vmaCreateBuffer(g_Allocator, &indexBufferInfo, &vmaAllocInfo,
+			&mesh.IndexBuffer.Buffer,
+			&mesh.IndexBuffer.Allocation,
+			nullptr));
+		vmaMapMemory(g_Allocator, mesh.IndexBuffer.Allocation, (void**)&data);
+
+		memcpy(data, mesh.Indices.data(), index_buffer_size);
+
+		vmaUnmapMemory(g_Allocator, mesh.IndexBuffer.Allocation);
+	}
+
+  // ImmediateSubmit([=](VkCommandBuffer cmd)
+  // {
+  //   VkBufferCopy copy;
+  //   copy.dstOffset = 0;
+  //   copy.srcOffset = 0;
+  //   copy.size = bufferSize;
+  //   vkCmdCopyBuffer(cmd, stagingBuffer.Buffer, mesh.VertexBuffer.Buffer, 1, &copy);
+  // });
+
+  // g_RenderState.MainDeletionQueue.push_function([=]()
+  // {
+  //   vmaDestroyBuffer(g_Allocator, mesh.VertexBuffer.Buffer, mesh.VertexBuffer.Allocation);
+  // });
+
+  // vmaDestroyBuffer(g_Allocator, stagingBuffer.Buffer, stagingBuffer.Allocation);
 }
 
 internal void
@@ -1763,7 +1795,7 @@ LoadImageToCache(const char* name, const char* path)
   VkImageViewCreateInfo imageinfo = vk::init::imageview_create_info(VK_FORMAT_R8G8B8A8_UNORM, newtex.Image.Image, VK_IMAGE_ASPECT_COLOR_BIT);
   vkCreateImageView(g_PlatformState.Device, &imageinfo, nullptr, &newtex.ImageView);
 
-  g_RenderState.LoadedTextures[name] = newtex;
+  //g_RenderState.LoadedTextures[name] = newtex;
 
 	// if (!result)
 	// {
@@ -1874,7 +1906,7 @@ LoadPrefab(const char* path, glm::mat4 root)
   //transparent objects will be invisible
 
   loadmesh.bDrawForwardPass = true;
-  loadmesh.bDrawShadowPass = true;
+  loadmesh.bDrawShadowPass = false;
 
   //glm::mat4 nodematrix{1.f};
 
@@ -2007,7 +2039,20 @@ InitScene()
 	
 	//glm::mat4 unrealFixRotation = glm::rotate(glm::radians(-90.f), glm::vec3{ 1,0,0 });
 
-
+  // for (int x = -20; x <= 20; x++) {
+	// 	for (int y = -20; y <= 20; y++) {
+	
+	// 		MeshObject tri;
+	// 		tri.Mesh = GetMesh("ship");
+	// 		tri.Material = GetMaterial("default");
+	// 		glm::mat4 translation = glm::translate(glm::mat4{ 1.0 }, glm::vec3(x, 0, y));
+	// 		glm::mat4 scale = glm::scale(glm::mat4{ 1.0 }, glm::vec3(0.2, 0.2, 0.2));
+	// 		tri.TransformMatrix = translation * scale;
+	
+	// 		RefreshRenderbounds(&tri);
+  //     g_RenderState.RenderScene->RegisterObject(&tri);
+	// 	}
+	// }
 }
 
 internal void
@@ -2101,9 +2146,9 @@ Init2()
 
   g_RenderState.Meshes.reserve(1000);
 
-  g_RenderState.RenderScene = &g_RenderScene;
-
   g_RenderState.ShaderCache = &g_ShaderCache;
+
+  g_RenderState.RenderScene = &g_RenderScene;
 
   g_RenderState.RenderScene->Init();
 
@@ -2195,7 +2240,7 @@ Cleanup()
 		//make sure the gpu has stopped doing its things
 		for (auto& frame : g_RenderState.Frames)
 		{
-			vkWaitForFences(g_PlatformState.Device, 1, &frame._renderFence, true, 1000000000);
+			vkWaitForFences(g_PlatformState.Device, 1, &frame.RenderFence, true, 1000000000);
 		}
 
 		g_RenderState.MainDeletionQueue.flush();

@@ -372,24 +372,25 @@ render_scene
                                               VMA_MEMORY_USAGE_GPU_ONLY);
 
     vk::renderer::ImmediateSubmit([&](VkCommandBuffer cmd)
-                                  {
-                                    for (auto &m : Meshes)
-                                    {
-                                      VkBufferCopy vertexCopy;
-                                      vertexCopy.dstOffset = m.FirstVertex * sizeof(Vertex);
-                                      vertexCopy.size = m.VertexCount * sizeof(Vertex);
-                                      vertexCopy.srcOffset = 0;
+    {
+      for (auto &m : Meshes)
+      {
+        VkBufferCopy vertexCopy;
+        vertexCopy.dstOffset = m.FirstVertex * sizeof(Vertex);
+        vertexCopy.size = m.VertexCount * sizeof(Vertex);
+        vertexCopy.srcOffset = 0;
+        vkCmdCopyBuffer(cmd, m.Original->VertexBuffer.Buffer, MergedVertexBuffer.Buffer, 1, &vertexCopy);
 
-                                      vkCmdCopyBuffer(cmd, m.Original->VertexBuffer.Buffer, MergedVertexBuffer.Buffer, 1, &vertexCopy);
-
-                                      VkBufferCopy indexCopy;
-                                      indexCopy.dstOffset = m.FirstIndex * sizeof(u32);
-                                      indexCopy.size = m.IndexCount * sizeof(u32);
-                                      indexCopy.srcOffset = 0;
-
-                                      vkCmdCopyBuffer(cmd, m.Original->IndexBuffer.Buffer, MergedIndexBuffer.Buffer, 1, &indexCopy);
-                                    }
-                                  });
+        if (m.IndexCount > 0)
+        {
+          VkBufferCopy indexCopy;
+          indexCopy.dstOffset = m.FirstIndex * sizeof(u32);
+          indexCopy.size = m.IndexCount * sizeof(u32);
+          indexCopy.srcOffset = 0;
+          vkCmdCopyBuffer(cmd, m.Original->IndexBuffer.Buffer, MergedIndexBuffer.Buffer, 1, &indexCopy);
+        }
+      }
+    });
   }
 
 	void

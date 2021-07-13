@@ -149,7 +149,7 @@ renderpass_begin_info(VkRenderPass renderPass, VkExtent2D windowExtent, VkFrameb
   info.renderArea.offset.x = 0;
   info.renderArea.offset.y = 0;
   info.renderArea.extent = windowExtent;
-  info.clearValueCount = 1;
+  info.clearValueCount = 0;
   info.pClearValues = nullptr;
   info.framebuffer = framebuffer;
 

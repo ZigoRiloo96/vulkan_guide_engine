@@ -112,6 +112,7 @@ Mesh
           tinyobj::real_t vx = attrib.vertices[3 * idx.vertex_index + 0];
           tinyobj::real_t vy = attrib.vertices[3 * idx.vertex_index + 1];
           tinyobj::real_t vz = attrib.vertices[3 * idx.vertex_index + 2];
+
           tinyobj::real_t nx = attrib.normals[3 * idx.normal_index + 0];
           tinyobj::real_t ny = attrib.normals[3 * idx.normal_index + 1];
           tinyobj::real_t nz = attrib.normals[3 * idx.normal_index + 2];
@@ -134,6 +135,8 @@ Mesh
           new_vert.UV.y = 1 - uy;
 
           Vertices.push_back(new_vert);
+          
+          // Indices.push_back(idx.vertex_index);
         }
 
         index_offset += fv;

@@ -5,7 +5,7 @@
 #define FREEZE_CULL 0
 
 // AutoCVar_Int CVAR_Shadowcast("gpu.shadowcast", "Use shadowcasting", 1, CVarFlags::EditCheckbox);
-#define SHADOWCAST 1
+#define SHADOWCAST 0
 
 // AutoCVar_Float CVAR_ShadowBias("gpu.shadowBias", "Distance cull", 5.25f);
 #define SHADOW_BIAS 5.25f
@@ -61,7 +61,7 @@ ExecuteComputeCull(VkCommandBuffer cmd,
 
 	vk::descriptor::builder::BuildDescriptorSet(
 		*g_RenderState.GetCurrentFrame().DynamicDescriptorAllocator,
-		*g_RenderState.DescriptorLayoutCache, COMPObjectDataSet, binds);
+		*g_RenderState.DescriptorLayoutCache, COMPObjectDataSet, binds, 6);
 
 	glm::mat4 projection = params.projmat;
 	glm::mat4 projectionT = transpose(projection);
@@ -245,7 +245,7 @@ ReadyMeshDraw(VkCommandBuffer cmd)
 				{ 2, &targetInfo, nullptr, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT }
 			};
 
-			vk::descriptor::builder::BuildDescriptorSet(*g_RenderState.GetCurrentFrame().DynamicDescriptorAllocator, *g_RenderState.DescriptorLayoutCache, COMPObjectDataSet, binds);
+			vk::descriptor::builder::BuildDescriptorSet(*g_RenderState.GetCurrentFrame().DynamicDescriptorAllocator, *g_RenderState.DescriptorLayoutCache, COMPObjectDataSet, binds, 3);
 
 			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g_RenderState.SparseUploadPipeline);
 
@@ -416,7 +416,8 @@ ExecuteDrawCommands(VkCommandBuffer cmd,
 		VkDeviceSize offset = 0;
 		vkCmdBindVertexBuffers(cmd, 0, 1, &g_RenderState.RenderScene->MergedVertexBuffer.Buffer, &offset);
 
-		vkCmdBindIndexBuffer(cmd, g_RenderState.RenderScene->MergedIndexBuffer.Buffer, 0, VK_INDEX_TYPE_UINT32);
+		if (g_RenderState.RenderScene->MergedIndexBuffer.Buffer)
+			vkCmdBindIndexBuffer(cmd, g_RenderState.RenderScene->MergedIndexBuffer.Buffer, 0, VK_INDEX_TYPE_UINT32);
 
 		g_RenderState.stats.objects = static_cast<u32>(pass.FlatBatches.size());
 		for (i32 i = 0; i < pass.Multibatches.size(); i++)
@@ -530,6 +531,8 @@ DrawObjectsForward(VkCommandBuffer cmd,
 
 	VkDescriptorBufferInfo instanceInfo = pass.CompactedInstanceBuffer.GetInfo();
 
+	if (!instanceInfo.buffer) return;
+
 	VkDescriptorImageInfo shadowImage;
 	shadowImage.sampler = g_RenderState.ShadowSampler;
 
@@ -545,17 +548,17 @@ DrawObjectsForward(VkCommandBuffer cmd,
 		{ 2, nullptr, &shadowImage, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT }
 	};
 
-	vk::descriptor::builder::BuildDescriptorSet(*g_RenderState.GetCurrentFrame().DynamicDescriptorAllocator, *g_RenderState.DescriptorLayoutCache, GlobalSet, binds1);
+	vk::descriptor::builder::BuildDescriptorSet(*g_RenderState.GetCurrentFrame().DynamicDescriptorAllocator, *g_RenderState.DescriptorLayoutCache, GlobalSet, binds1, 3);
 
 	VkDescriptorSet ObjectDataSet;
 
 	vk::descriptor::builder::descriptor_bind binds2[] =
 	{
-		{ 0, &objectBufferInfo, nullptr, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_SHADER_STAGE_VERTEX_BIT },
-		{ 1, &instanceInfo, nullptr, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT }
+		{ 0, &objectBufferInfo, nullptr, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT },
+		{ 1, &instanceInfo, nullptr, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT }
 	};
 
-	vk::descriptor::builder::BuildDescriptorSet(*g_RenderState.GetCurrentFrame().DynamicDescriptorAllocator, *g_RenderState.DescriptorLayoutCache, ObjectDataSet, binds2);
+	vk::descriptor::builder::BuildDescriptorSet(*g_RenderState.GetCurrentFrame().DynamicDescriptorAllocator, *g_RenderState.DescriptorLayoutCache, ObjectDataSet, binds2, 2);
 
 	vkCmdSetDepthBias(cmd, 0, 0, 0);
 
@@ -597,17 +600,17 @@ DrawObjectsShadow(VkCommandBuffer cmd,
 		{ 0, &camInfo, nullptr, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_SHADER_STAGE_VERTEX_BIT }
 	};
 
-	vk::descriptor::builder::BuildDescriptorSet(*g_RenderState.GetCurrentFrame().DynamicDescriptorAllocator, *g_RenderState.DescriptorLayoutCache, GlobalSet, binds1);
+	vk::descriptor::builder::BuildDescriptorSet(*g_RenderState.GetCurrentFrame().DynamicDescriptorAllocator, *g_RenderState.DescriptorLayoutCache, GlobalSet, binds1, 1);
 
 	VkDescriptorSet ObjectDataSet;
 
 	vk::descriptor::builder::descriptor_bind binds2[] =
 	{
-		{ 0, &objectBufferInfo, nullptr, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_SHADER_STAGE_VERTEX_BIT },
-		{ 1, &instanceInfo, nullptr, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_SHADER_STAGE_VERTEX_BIT }
+		{ 0, &objectBufferInfo, nullptr, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT },
+		{ 1, &instanceInfo, nullptr, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT }
 	};
 
-	vk::descriptor::builder::BuildDescriptorSet(*g_RenderState.GetCurrentFrame().DynamicDescriptorAllocator, *g_RenderState.DescriptorLayoutCache, ObjectDataSet, binds2);
+	vk::descriptor::builder::BuildDescriptorSet(*g_RenderState.GetCurrentFrame().DynamicDescriptorAllocator, *g_RenderState.DescriptorLayoutCache, ObjectDataSet, binds2, 2);
 
 	vkCmdSetDepthBias(cmd, SHADOW_BIAS, 0, SLOPE_BIAS);
 
@@ -672,7 +675,7 @@ ReduceDepth(VkCommandBuffer cmd)
 			{ 1, nullptr, &sourceTarget, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_COMPUTE_BIT }
 		};
 
-		vk::descriptor::builder::BuildDescriptorSet(*g_RenderState.GetCurrentFrame().DynamicDescriptorAllocator, *g_RenderState.DescriptorLayoutCache, depthSet, binds1);
+		vk::descriptor::builder::BuildDescriptorSet(*g_RenderState.GetCurrentFrame().DynamicDescriptorAllocator, *g_RenderState.DescriptorLayoutCache, depthSet, binds1, 2);
 
 		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g_RenderState.DepthReduceLayout, 0, 1, &depthSet, 0, nullptr);
 
@@ -690,8 +693,13 @@ ReduceDepth(VkCommandBuffer cmd)
 		vkCmdDispatch(cmd, GetGroupCount(levelWidth, 32), GetGroupCount(levelHeight, 32), 1);
 
 		VkImageMemoryBarrier reduceBarrier = vk::init::image_barrier(g_RenderState.DepthPyramid.Image, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_ASPECT_COLOR_BIT);
-
 		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0, 0, 0, 0, 1, &reduceBarrier);
+
+		//VkImageMemoryBarrier reduceBarrier = vk::init::image_barrier(g_RenderState.DepthPyramid.Image, 0, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_ASPECT_COLOR_BIT);
+		//vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0, 0, 0, 0, 1, &reduceBarrier);
+
+		// VkImageMemoryBarrier readBarrier = imageBarrier(depthPyramid.image, 0, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+		// vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, 0, 1, &fillBarrier, 1, &readBarrier);
 	}
 
 	VkImageMemoryBarrier depthWriteBarrier = vk::init::image_barrier(g_RenderState.DepthImage.Image, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);

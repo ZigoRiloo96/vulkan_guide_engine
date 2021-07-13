@@ -46,7 +46,7 @@ namespace logger
 #endif
 
 #if defined(IMGUI_API)
-    g_Log.AddLog("[%.1f][%s]%s\n", ImGui::GetTime(), color == 8 ? "LOG" : color == 4 ? "ERR" : "WARN", buffer);
+    // g_Log.AddLog("[%.1f][%s]%s\n", ImGui::GetTime(), color == 8 ? "LOG" : color == 4 ? "ERR" : "WARN", buffer);
 #endif
   }
 

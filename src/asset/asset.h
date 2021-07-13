@@ -2,6 +2,12 @@
 namespace assets
 {
 
+  enum class TransparencyMode:uint8_t {
+		Opaque,
+		Transparent,
+		Masked
+	};
+
   enum class
   compression_mode : u32
   {

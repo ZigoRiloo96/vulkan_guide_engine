@@ -32,7 +32,7 @@ struct material;
 namespace vk::renderer
 {
 
-constexpr unsigned int FRAME_OVERLAP = 1;
+constexpr unsigned int FRAME_OVERLAP = 2;
 // const int MAX_OBJECTS = 150000;
 
 struct DeletionQueue
@@ -329,7 +329,7 @@ vulkan_render_state
   DirectionalLight MainLight;
 
   allocated_image ShadowImage;
-  VkExtent2D ShadowExtent{ 1024*4,1024*4 };
+  VkExtent2D ShadowExtent{ 1024,1024 };
 
   VkSampler ShadowSampler;
 

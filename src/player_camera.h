@@ -14,9 +14,86 @@ player_camera
 	bool bLocked;
 
 	void
-  ProcessInputEvent(/* SDL_Event* ev*/)
+  ProcessInputEvent(u32 message, i64 params/* SDL_Event* ev*/)
   {
+    if (message == WM_KEYDOWN)
+    {
+      switch (params)
+      {
+      case VK_UP:
+        InputAxis.x += 1.f;
+        break;
+      case VK_DOWN:
+        InputAxis.x -= 1.f;
+        break;
+      case VK_LEFT:
+        InputAxis.y -= 1.f;
+        break;
+      case VK_RIGHT:
+        InputAxis.y += 1.f;
+        break;
+      // case SDLK_q:
+      //   inputAxis.z -= 1.f;
+      //   break;
 
+      // case SDLK_e:
+      //   inputAxis.z += 1.f;
+      //   break;
+      case VK_LSHIFT:
+        bSprint = true;
+        break;
+      }
+    }
+    else if (message == WM_KEYUP)
+    {
+      switch (params)
+      {
+      case VK_UP:
+        InputAxis.x -= 1.f;
+        break;
+      case VK_DOWN:
+        InputAxis.x += 1.f;
+        break;
+      case VK_LEFT:
+        InputAxis.y += 1.f;
+        break;
+      case VK_RIGHT:
+        InputAxis.y -= 1.f;
+        break;
+      // case SDLK_q:
+      //   inputAxis.z += 1.f;
+      //   break;
+
+      // case SDLK_e:
+      //   inputAxis.z -= 1.f;
+      //   break;
+      case VK_LSHIFT:
+        bSprint = false;
+        break;
+      }
+    }
+    else if (message == WM_MOUSEMOVE)
+    {
+      if (!bLocked)
+      {
+        static int xPos = LOWORD(params);
+        static int yPos = HIWORD(params);
+        
+        int xPosCurrent = LOWORD(params);
+        int yPosCurrent = HIWORD(params);
+
+        int xPosRelative = xPos - xPosCurrent;
+        int yPosRelative = yPos - yPosCurrent;
+
+        xPos = xPosCurrent;
+        yPos = yPosCurrent;
+
+        Pitch -= yPosRelative * 0.003f;
+        Yaw -= xPosRelative * 0.003f;
+      }
+    }
+
+    InputAxis = glm::clamp(InputAxis, {-1.0, -1.0, -1.0}, {1.0, 1.0, 1.0});
   }
 
 	void

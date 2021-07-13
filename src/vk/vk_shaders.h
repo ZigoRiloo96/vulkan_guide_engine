@@ -174,6 +174,90 @@ shader_effect
         constant_ranges.push_back(pcs);
       }
     }
+
+    std::array<descriptor_set_layout_data, 4> merged_layouts;
+
+    for (u32 i = 0; i < 4; i++)
+    {
+      descriptor_set_layout_data& ly = merged_layouts[i];
+
+      ly.SetNumber = i;
+
+      ly.CreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+
+      std::unordered_map<int, VkDescriptorSetLayoutBinding> binds;
+
+      for (auto& s : set_layouts)
+      {
+        if (s.SetNumber == i)
+        {
+          for (auto& b : s.Bindings)
+          {
+            auto it = binds.find(b.binding);
+            if (it == binds.end())
+            {
+              binds[b.binding] = b;
+              //ly.bindings.push_back(b);
+            }
+            else {
+              //merge flags
+              binds[b.binding].stageFlags |= b.stageFlags;
+            }
+
+          }
+        }
+      }
+      for (auto [k, v] : binds)
+      {
+        ly.Bindings.push_back(v);
+      }
+      //sort the bindings, for hash purposes
+      std::sort(ly.Bindings.begin(), ly.Bindings.end(), [](VkDescriptorSetLayoutBinding& a, VkDescriptorSetLayoutBinding& b)
+      {
+        return a.binding < b.binding;
+      });
+
+
+      ly.CreateInfo.bindingCount = (u32)ly.Bindings.size();
+      ly.CreateInfo.pBindings = ly.Bindings.data();
+      ly.CreateInfo.flags = 0;
+      ly.CreateInfo.pNext = 0;
+
+
+      if (ly.CreateInfo.bindingCount > 0)
+      {
+        SetHashes[i] = vk::util::HashDescriptorLayoutInfo(&ly.CreateInfo);
+        vkCreateDescriptorSetLayout(vk::renderer::g_PlatformState.Device, &ly.CreateInfo, nullptr, &SetLayouts[i]);
+      }
+      else
+      {
+        SetHashes[i] = 0;
+        SetLayouts[i] = VK_NULL_HANDLE;
+      }
+    }
+
+    //we start from just the default empty pipeline layout info
+    VkPipelineLayoutCreateInfo mesh_pipeline_layout_info = vk::init::pipeline_layout_create_info();
+
+    mesh_pipeline_layout_info.pPushConstantRanges = constant_ranges.data();
+    mesh_pipeline_layout_info.pushConstantRangeCount = (u32)constant_ranges.size();
+
+    std::array<VkDescriptorSetLayout, 4> compactedLayouts;
+    int s = 0;
+    for (int i = 0; i < 4; i++)
+    {
+      if (SetLayouts[i] != VK_NULL_HANDLE)
+      {
+        compactedLayouts[s] = SetLayouts[i];
+        s++;
+      }
+    }
+
+    mesh_pipeline_layout_info.setLayoutCount = s;
+    mesh_pipeline_layout_info.pSetLayouts = compactedLayouts.data();
+
+
+    vkCreatePipelineLayout(vk::renderer::g_PlatformState.Device, &mesh_pipeline_layout_info, nullptr, &BuiltLayout);
   }
 
   void

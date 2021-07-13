@@ -228,7 +228,7 @@ effect_template
 		
 		shader_parametrs* DefaultParameters;
 
-		// assets::TransparencyMode Transparency;
+		assets::TransparencyMode Transparency;
 };
 
 struct
@@ -338,7 +338,7 @@ BuildDefaultTemplates(vk::shader::shader_cache* shaderCache, VkRenderPass render
 		defaultTextured.PassShaders[MeshpassType::Forward] = texturedLitPass;
 
 		defaultTextured.DefaultParameters = nullptr;
-		// defaultTextured.Transparency = assets::TransparencyMode::Opaque;
+		defaultTextured.Transparency = assets::TransparencyMode::Opaque;
 
 		TemplateCache["texturedPBR_opaque"] = defaultTextured;
 	}
@@ -366,7 +366,7 @@ BuildDefaultTemplates(vk::shader::shader_cache* shaderCache, VkRenderPass render
 		defaultTextured.PassShaders[MeshpassType::Forward] = nullptr;
 
 		defaultTextured.DefaultParameters = nullptr;
-		// defaultTextured.Transparency = assets::TransparencyMode::Transparent;
+		defaultTextured.Transparency = assets::TransparencyMode::Transparent;
 
 		TemplateCache["texturedPBR_transparent"] = defaultTextured;
 	}
@@ -378,7 +378,7 @@ BuildDefaultTemplates(vk::shader::shader_cache* shaderCache, VkRenderPass render
 		defaultColored.PassShaders[MeshpassType::DirectionalShadow] = opaqueShadowcastPass;
 		defaultColored.PassShaders[MeshpassType::Forward] = defaultLitPass;
 		defaultColored.DefaultParameters = nullptr;
-		// defaultColored.Transparency = assets::TransparencyMode::Opaque;
+		defaultColored.Transparency = assets::TransparencyMode::Opaque;
 		TemplateCache["colored_opaque"] = defaultColored;
 	}
 }
@@ -475,8 +475,8 @@ BuildMaterial(const std::string& materialName,
       binds.push_back( bind );
 		}
 
-		vk::descriptor::builder::BuildDescriptorSet(descriptorAllocator, descriptorLayoutCache, newMat->PassSets[MeshpassType::Forward], binds.data());
-    vk::descriptor::builder::BuildDescriptorSet(descriptorAllocator, descriptorLayoutCache, newMat->PassSets[MeshpassType::Transparency], binds.data());
+		vk::descriptor::builder::BuildDescriptorSet(descriptorAllocator, descriptorLayoutCache, newMat->PassSets[MeshpassType::Forward], binds.data(), (u32)binds.size());
+    vk::descriptor::builder::BuildDescriptorSet(descriptorAllocator, descriptorLayoutCache, newMat->PassSets[MeshpassType::Transparency], binds.data(), (u32)binds.size());
 
 		//LOG_INFO("Built New Material {}", materialName);
 		//add material to cache

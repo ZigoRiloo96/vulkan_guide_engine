@@ -285,14 +285,13 @@ namespace vk::descriptor
                        cache& Cache, 
                        VkDescriptorSet &DescriptorSet,
                        VkDescriptorSetLayout &Layout,
-                       descriptor_bind* Binds)
+                       descriptor_bind* Binds,
+                       u32 BindsCount)
     {
       std::vector<VkDescriptorSetLayoutBinding> Bindings;
       std::vector<VkWriteDescriptorSet> Writes;
 
-      u32 bindsCount = sizeof(Binds) / sizeof(descriptor_bind);
-
-      for (u32 i = 0; i < bindsCount; i++)
+      for (u32 i = 0; i < BindsCount; i++)
       {
         descriptor_bind& bind = Binds[i];
 
@@ -342,10 +341,11 @@ namespace vk::descriptor
     BuildDescriptorSet(allocator& Alloc,
                         cache& Cache,
                         VkDescriptorSet &DescriptorSet,
-                        descriptor_bind* Binds)
+                        descriptor_bind* Binds,
+                        u32 BindsCount)
     {
       VkDescriptorSetLayout Layout;
-      BuildDescriptorSet(Alloc, Cache, DescriptorSet, Layout, Binds);
+      BuildDescriptorSet(Alloc, Cache, DescriptorSet, Layout, Binds, BindsCount);
     }
     
   }
