@@ -1,15 +1,9 @@
-[submodule "external/VulkanMemoryAllocator-Hpp"]
-	path = external/VulkanMemoryAllocator-Hpp
-	url = https://github.com/malte-v/VulkanMemoryAllocator-Hpp.git
 [submodule "external/glm"]
 	path = external/glm
 	url = https://github.com/g-truc/glm.git
-[submodule "external/tinyobjloader"]
-	path = external/tinyobjloader
-	url = https://github.com/tinyobjloader/tinyobjloader.git
-[submodule "external/stb"]
-	path = external/stb
-	url = https://github.com/nothings/stb.git
+[submodule "external/imgui"]
+	path = external/imgui
+	url = https://github.com/ocornut/imgui.git
 [submodule "external/json"]
 	path = external/json
 	url = https://github.com/nlohmann/json.git
@@ -19,9 +13,15 @@
 [submodule "external/nvidia-texture-tools"]
 	path = external/nvidia-texture-tools
 	url = https://github.com/castano/nvidia-texture-tools.git
-[submodule "external/imgui"]
-	path = external/imgui
-	url = https://github.com/ocornut/imgui.git
+[submodule "external/SPIRV-Reflect"]
+	path = external/SPIRV-Reflect
+	url = https://github.com/KhronosGroup/SPIRV-Reflect.git
+[submodule "external/stb"]
+	path = external/stb
+	url = https://github.com/nothings/stb.git
+[submodule "external/tinyobjloader"]
+	path = external/tinyobjloader
+	url = https://github.com/tinyobjloader/tinyobjloader.git
 [submodule "external/vk-bootstrap"]
 	path = external/vk-bootstrap
 	url = https://github.com/charles-lunarg/vk-bootstrap.git
