@@ -4,7 +4,7 @@ setlocal
 
 call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvars64.bat"
 
-set CommonCompilerFlags= -MTd -I%VULKAN_SDK%\Include -I..\external\imgui -I..\external\lz4\lib -I..\external\json\single_include -I..\external\VulkanMemoryAllocator\src -I..\external\vk-bootstrap\src -I..\external\stb -I..\external\tinyobjloader -I..\external\glm -diagnostics:column -WL -Od -nologo -fp:fast -fp:except- -Gm- -GR- -EHa- -Zo -Oi -WX -W4 -wd4324 -wd4201 -wd4530 -wd4100 -wd4189 -wd4505 -wd4127 -FC -GS- -Gs9999999
+set CommonCompilerFlags= -MTd -I%VULKAN_SDK%\Include -I..\external\SPIRV-Reflect -I..\external\imgui -I..\external\lz4\lib -I..\external\json\single_include -I..\external\VulkanMemoryAllocator\src -I..\external\vk-bootstrap\src -I..\external\stb -I..\external\tinyobjloader -I..\external\glm -diagnostics:column -WL -Od -nologo -fp:fast -fp:except- -Gm- -GR- -EHa- -Zo -Oi -WX -W4 -wd4324 -wd4201 -wd4530 -wd4100 -wd4189 -wd4505 -wd4127 -FC -GS- -Gs9999999
 set CompilerFlags2= -O2 -nologo -fp:fast -WX -W4 -wd4324 -wd4201 -wd4530 -wd4100 -wd4189 -wd4505 -wd4127
 set AssetsConverterFlags= -MT -I..\external\lz4\lib -I..\external\json\single_include -I..\external\stb -I..\external\tinyobjloader -I..\external\glm
 set DebugCompilerFlags= /Z7 /FC /LD

@@ -11,7 +11,7 @@ namespace vk::renderer
   static VkAllocationCallbacks* g_VkAllocator = NULL;
   global_variable VmaAllocator g_Allocator;
 
-  allocated_buffer
+  allocated_buffer_untyped
   CreateBuffer(u64 allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage, VkMemoryPropertyFlags requiredFlags = 0);
 
   void
@@ -26,32 +26,56 @@ namespace vk::renderer
 namespace vk::renderer
 {
 
-allocated_buffer
-CreateBuffer(u64 allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage, VkMemoryPropertyFlags requiredFlags)
+allocated_buffer_untyped
+CreateBuffer(u64 allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage, VkMemoryPropertyFlags required_flags)
 {
-  VkBufferCreateInfo bufferInfo = {};
-  bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-  bufferInfo.pNext = nullptr;
+	//allocate vertex buffer
+	VkBufferCreateInfo bufferInfo = {};
+	bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	bufferInfo.pNext = nullptr;
+	bufferInfo.size = allocSize;
 
-  bufferInfo.size = allocSize;
-  bufferInfo.usage = usage;
+	bufferInfo.usage = usage;
+
+	VmaAllocationCreateInfo vmaallocInfo = {};
+	vmaallocInfo.usage = memoryUsage;
+	vmaallocInfo.requiredFlags = required_flags;
+	allocated_buffer_untyped newBuffer;
+
+	VK_CHECK(vmaCreateBuffer(g_Allocator, &bufferInfo, &vmaallocInfo,
+		&newBuffer.Buffer,
+		&newBuffer.Allocation,
+		nullptr));
+	newBuffer.Size = allocSize;
+	return newBuffer;
+}
+
+// allocated_buffer
+// CreateBuffer(u64 allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage, VkMemoryPropertyFlags requiredFlags)
+// {
+//   VkBufferCreateInfo bufferInfo = {};
+//   bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+//   bufferInfo.pNext = nullptr;
+
+//   bufferInfo.size = allocSize;
+//   bufferInfo.usage = usage;
 
   
-  VmaAllocationCreateInfo vmaallocInfo = {};
-  vmaallocInfo.usage = memoryUsage;
-  vmaallocInfo.requiredFlags = requiredFlags;
+//   VmaAllocationCreateInfo vmaallocInfo = {};
+//   vmaallocInfo.usage = memoryUsage;
+//   vmaallocInfo.requiredFlags = requiredFlags;
 
-  allocated_buffer newBuffer;
+//   allocated_buffer newBuffer;
 
-  VK_CHECK(vmaCreateBuffer(g_Allocator, &bufferInfo, &vmaallocInfo,
-    &newBuffer.Buffer,
-    &newBuffer.Allocation,
-    nullptr));
+//   VK_CHECK(vmaCreateBuffer(g_Allocator, &bufferInfo, &vmaallocInfo,
+//     &newBuffer.Buffer,
+//     &newBuffer.Allocation,
+//     nullptr));
 
-  newBuffer.Size = allocSize;
+//   newBuffer.Size = allocSize;
 
-  return newBuffer;
-}
+//   return newBuffer;
+// }
 
 u64
 PadUniformBufferSize(u64 originalSize)
@@ -91,67 +115,28 @@ debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
   return VK_FALSE;
 }
 
-internal vulkan_platform_state
-Win32InitVulkan(HWND WindowWin32, HINSTANCE InstanceWin32)
+u32 previousPow2(u32 v)
 {
-  g_PlatformState.Win32NativeWindow = WindowWin32;
+	u32 r = 1;
 
-  vkb::InstanceBuilder builder;
-  auto inst_ret = builder.set_app_name("VulkanEngine")
-    .request_validation_layers(true)
-    .require_api_version(1,1,0)
-    .use_default_debug_messenger()
-    .set_debug_callback(debug_callback)
-    .build();
+	while (r * 2 < v)
+		r *= 2;
 
-  vkb::Instance vkb_inst = inst_ret.value();
+	return r;
+}
 
-  VkSurfaceKHR Surface = VK_NULL_HANDLE;
-  {
-    VkWin32SurfaceCreateInfoKHR SurfaceCreateInfo = {};
-    SurfaceCreateInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-    SurfaceCreateInfo.pNext = nullptr;
-    SurfaceCreateInfo.flags = 0;
-    SurfaceCreateInfo.hinstance = InstanceWin32;
-    SurfaceCreateInfo.hwnd = WindowWin32;
-    VkResult Result = vkCreateWin32SurfaceKHR(vkb_inst.instance, &SurfaceCreateInfo, nullptr, &Surface);
-    Assert(Result == VK_SUCCESS);
-  }
+u32 getImageMipLevels(u32 width, u32 height)
+{
+	u32 result = 1;
 
+	while (width > 1 || height > 1)
+	{
+		result++;
+		width /= 2;
+		height /= 2;
+	}
 
-  vkb::PhysicalDeviceSelector selector { vkb_inst };
-  vkb::PhysicalDevice physicalDevice = selector
-    .set_minimum_version(1,1)
-    .set_surface(Surface)
-    .select()
-    .value();
-
-  vkb::DeviceBuilder deviceBuilder { physicalDevice };
-  vkb::Device vkbDevice = deviceBuilder.build().value();
-
-  VkSurfaceCapabilitiesKHR surfaceCapabilities;
-  vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice.physical_device, Surface, &surfaceCapabilities);
-  g_PlatformState.WindowExtent = surfaceCapabilities.currentExtent;
-
-  g_PlatformState.Device = vkbDevice.device;
-  g_PlatformState.ChosenGPU = physicalDevice.physical_device;
-  g_PlatformState.Instance = vkb_inst.instance;
-  g_PlatformState.Surface = Surface;
-  g_PlatformState.DebugMessenger = vkb_inst.debug_messenger;
-
-  g_RenderState.GraphicsQueue = vkbDevice.get_queue(vkb::QueueType::graphics).value();
-  g_RenderState.GraphicsQueueFamily = vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
-
-  VmaAllocatorCreateInfo allocatorInfo = {};
-  allocatorInfo.physicalDevice = g_PlatformState.ChosenGPU;
-  allocatorInfo.device = g_PlatformState.Device;
-  allocatorInfo.instance = g_PlatformState.Instance;
-  allocatorInfo.pAllocationCallbacks = g_VkAllocator;
-  vmaCreateAllocator(&allocatorInfo, &g_Allocator);
-
-  vkGetPhysicalDeviceProperties(g_PlatformState.ChosenGPU, &g_PlatformState.GpuProperties);
-
-  return g_PlatformState;
+	return result;
 }
 
 internal void
@@ -171,6 +156,24 @@ InitSwapchain()
   g_RenderState.SwapchainImageViews = vkbSwapchain.get_image_views().value();
   g_RenderState.SwapchainImageFormat = vkbSwapchain.image_format;
 
+  // render image
+  {
+    VkExtent3D renderImageExtent =
+    {
+			g_PlatformState.WindowExtent.width,
+			g_PlatformState.WindowExtent.height,
+			1
+		};
+		g_RenderState.SwapchainImageFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
+		VkImageCreateInfo ri_info = vk::init::image_create_info(g_RenderState.SwapchainImageFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT| VK_IMAGE_USAGE_SAMPLED_BIT, renderImageExtent);
+		VmaAllocationCreateInfo dimg_allocinfo = {};
+		dimg_allocinfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+		dimg_allocinfo.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		vmaCreateImage(g_Allocator, &ri_info, &dimg_allocinfo, &g_RenderState.RawRenderImage.Image, &g_RenderState.RawRenderImage.Allocation, nullptr);
+		VkImageViewCreateInfo dview_info = vk::init::imageview_create_info(g_RenderState.SwapchainImageFormat, g_RenderState.RawRenderImage.Image, VK_IMAGE_ASPECT_COLOR_BIT);
+		VK_CHECK(vkCreateImageView(g_PlatformState.Device, &dview_info, nullptr, &g_RenderState.RawRenderImage.DefaultView));
+  }
+
   g_RenderState.MainDeletionQueue.push_function([=]()
   {
     vkDestroySwapchainKHR(g_PlatformState.Device, g_RenderState.Swapchain, nullptr);
@@ -183,25 +186,134 @@ InitSwapchain()
     1
   };
 
+  VkExtent3D shadowExtent =
+  {
+		g_PlatformState.WindowExtent.width,
+		g_PlatformState.WindowExtent.height,
+		1
+	};
+
   g_RenderState.DepthFormat = VK_FORMAT_D32_SFLOAT;
 
-  VkImageCreateInfo dimg_info = vk::init::image_create_info(g_RenderState.DepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, depthImageExtent);
+  //VkImageCreateInfo dimg_info = vk::init::image_create_info(g_RenderState.DepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, depthImageExtent);
 
   VmaAllocationCreateInfo dimg_allocinfo = {};
   dimg_allocinfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
   dimg_allocinfo.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-  vmaCreateImage(g_Allocator, &dimg_info, &dimg_allocinfo, &g_RenderState.DepthImage.Image, &g_RenderState.DepthImage.Allocation, nullptr);
-
-  VkImageViewCreateInfo dview_info = vk::init::imageview_create_info(g_RenderState.DepthFormat, g_RenderState.DepthImage.Image, VK_IMAGE_ASPECT_DEPTH_BIT);
-
-  VK_CHECK(vkCreateImageView(g_PlatformState.Device, &dview_info, nullptr, &g_RenderState.DepthImageView));
-
-  g_RenderState.MainDeletionQueue.push_function([=]()
+  // depth image
   {
-    vkDestroyImageView(g_PlatformState.Device, g_RenderState.DepthImageView, nullptr);
-    vmaDestroyImage(g_Allocator, g_RenderState.DepthImage.Image, g_RenderState.DepthImage.Allocation);
-  });
+    VkImageCreateInfo dimg_info = vk::init::image_create_info(g_RenderState.DepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, depthImageExtent);
+		vmaCreateImage(g_Allocator, &dimg_info, &dimg_allocinfo, &g_RenderState.DepthImage.Image, &g_RenderState.DepthImage.Allocation, nullptr);
+		VkImageViewCreateInfo dview_info = vk::init::imageview_create_info(g_RenderState.DepthFormat, g_RenderState.DepthImage.Image, VK_IMAGE_ASPECT_DEPTH_BIT);;
+		VK_CHECK(vkCreateImageView(g_PlatformState.Device, &dview_info, nullptr, &g_RenderState.DepthImage.DefaultView));
+  }
+
+  //shadow image
+	{
+		VkImageCreateInfo dimg_info = vk::init::image_create_info(g_RenderState.DepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, shadowExtent);
+		vmaCreateImage(g_Allocator, &dimg_info, &dimg_allocinfo, &g_RenderState.ShadowImage.Image, &g_RenderState.ShadowImage.Allocation, nullptr);
+		VkImageViewCreateInfo dview_info = vk::init::imageview_create_info(g_RenderState.DepthFormat, g_RenderState.ShadowImage.Image, VK_IMAGE_ASPECT_DEPTH_BIT);
+		VK_CHECK(vkCreateImageView(g_PlatformState.Device, &dview_info, nullptr, &g_RenderState.ShadowImage.DefaultView));
+	}
+
+  //vmaCreateImage(g_Allocator, &dimg_info, &dimg_allocinfo, &g_RenderState.DepthImage.Image, &g_RenderState.DepthImage.Allocation, nullptr);
+  //VkImageViewCreateInfo dview_info = vk::init::imageview_create_info(g_RenderState.DepthFormat, g_RenderState.DepthImage.Image, VK_IMAGE_ASPECT_DEPTH_BIT);
+  //VK_CHECK(vkCreateImageView(g_PlatformState.Device, &dview_info, nullptr, &g_RenderState.DepthImageView));
+
+  // ########################
+
+  g_RenderState.DepthPyramidWidth = previousPow2(g_PlatformState.WindowExtent.width);
+	g_RenderState.DepthPyramidHeight = previousPow2(g_PlatformState.WindowExtent.height);
+	g_RenderState.DepthPyramidLevels = getImageMipLevels(g_RenderState.DepthPyramidWidth, g_RenderState.DepthPyramidHeight);
+
+	VkExtent3D pyramidExtent =
+  {
+		static_cast<uint32_t>(g_RenderState.DepthPyramidWidth),
+		static_cast<uint32_t>(g_RenderState.DepthPyramidHeight),
+		1
+	};
+
+	VkImageCreateInfo pyramidInfo = vk::init::image_create_info(VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, pyramidExtent);
+
+	pyramidInfo.mipLevels = g_RenderState.DepthPyramidLevels;
+
+	vmaCreateImage(g_Allocator, &pyramidInfo, &dimg_allocinfo, &g_RenderState.DepthPyramid.Image, &g_RenderState.DepthPyramid.Allocation, nullptr);
+
+	VkImageViewCreateInfo priview_info = vk::init::imageview_create_info(VK_FORMAT_R32_SFLOAT, g_RenderState.DepthPyramid.Image, VK_IMAGE_ASPECT_COLOR_BIT);
+	priview_info.subresourceRange.levelCount = g_RenderState.DepthPyramidLevels;
+
+  VK_CHECK(vkCreateImageView(g_PlatformState.Device, &priview_info, nullptr, &g_RenderState.DepthPyramid.DefaultView));
+
+	for (int32_t i = 0; i < g_RenderState.DepthPyramidLevels; ++i)
+	{
+		VkImageViewCreateInfo level_info = vk::init::imageview_create_info(VK_FORMAT_R32_SFLOAT, g_RenderState.DepthPyramid.Image, VK_IMAGE_ASPECT_COLOR_BIT);
+		level_info.subresourceRange.levelCount = 1;
+		level_info.subresourceRange.baseMipLevel = i;
+
+		VkImageView pyramid;
+		vkCreateImageView(g_PlatformState.Device, &level_info, nullptr, &pyramid);
+
+		g_RenderState.DepthPyramidMips[i] = pyramid;
+
+		Assert(g_RenderState.DepthPyramidMips[i]);
+	}
+
+  // ########################
+
+  VkSamplerCreateInfo createInfo = {};
+
+	auto reductionMode = VK_SAMPLER_REDUCTION_MODE_MIN;
+
+	createInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+	createInfo.magFilter = VK_FILTER_LINEAR;
+	createInfo.minFilter = VK_FILTER_LINEAR;
+	createInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+	createInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+	createInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+	createInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+	createInfo.minLod = 0;
+	createInfo.maxLod = 16.f;
+
+	VkSamplerReductionModeCreateInfoEXT createInfoReduction = { VK_STRUCTURE_TYPE_SAMPLER_REDUCTION_MODE_CREATE_INFO_EXT };
+
+	if (reductionMode != VK_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE_EXT)
+	{
+		createInfoReduction.reductionMode = reductionMode;
+
+		createInfo.pNext = &createInfoReduction;
+	}
+	
+	VK_CHECK(vkCreateSampler(g_PlatformState.Device, &createInfo, 0, &g_RenderState.DepthSampler));
+
+	VkSamplerCreateInfo samplerInfo = vk::init::sampler_create_info(VK_FILTER_LINEAR);
+	samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+	
+	vkCreateSampler(g_PlatformState.Device, &samplerInfo, nullptr, &g_RenderState.SmoothSampler);
+
+	VkSamplerCreateInfo shadsamplerInfo = vk::init::sampler_create_info(VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER);
+	shadsamplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+	shadsamplerInfo.compareEnable = true;
+	shadsamplerInfo.compareOp = VK_COMPARE_OP_LESS;
+	vkCreateSampler(g_PlatformState.Device, &shadsamplerInfo, nullptr, &g_RenderState.ShadowSampler);
+
+
+	//add to deletion queues
+	g_RenderState.MainDeletionQueue.push_function([=]()
+  {
+		vkDestroyImageView(g_PlatformState.Device, g_RenderState.DepthImage.DefaultView, nullptr);
+		vmaDestroyImage(g_Allocator, g_RenderState.DepthImage.Image, g_RenderState.DepthImage.Allocation);
+	});
+
+  // ########################
+
+	// VK_CHECK(vkCreateImageView(g_PlatformState.Device, &priview_info, nullptr, &g_RenderState.DepthPyramid.DefaultView));
+
+  // g_RenderState.MainDeletionQueue.push_function([=]()
+  // {
+  //   vkDestroyImageView(g_PlatformState.Device, g_RenderState.DepthImageView, nullptr);
+  //   vmaDestroyImage(g_Allocator, g_RenderState.DepthImage.Image, g_RenderState.DepthImage.Allocation);
+  // });
 }
 
 internal void
@@ -289,29 +401,236 @@ InitDefaultRenderpass()
 }
 
 internal void
+InitCopyRenderpass()
+{
+  VkAttachmentDescription color_attachment = {};
+	color_attachment.format = g_RenderState.SwapchainImageFormat;
+	color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+	color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	color_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	color_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	color_attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+	VkAttachmentReference color_attachment_ref = {};
+	color_attachment_ref.attachment = 0;
+	color_attachment_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+	//we are going to create 1 subpass, which is the minimum you can do
+	VkSubpassDescription subpass = {};
+	subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+	subpass.colorAttachmentCount = 1;
+	subpass.pColorAttachments = &color_attachment_ref;	
+
+	//1 dependency, which is from "outside" into the subpass. And we can read or write color
+	VkSubpassDependency dependency = {};
+	dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+	dependency.dstSubpass = 0;
+	dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency.srcAccessMask = 0;
+	dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+
+	VkRenderPassCreateInfo render_pass_info = {};
+	render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+	//2 attachments from said array
+	render_pass_info.attachmentCount = 1;
+	render_pass_info.pAttachments = &color_attachment;
+	render_pass_info.subpassCount = 1;
+	render_pass_info.pSubpasses = &subpass;
+	//render_pass_info.dependencyCount = 1;
+	//render_pass_info.pDependencies = &dependency;
+
+  VK_CHECK(vkCreateRenderPass(g_PlatformState.Device, &render_pass_info, nullptr, &g_RenderState.CopyPass));
+
+  g_RenderState.MainDeletionQueue.push_function([=]()
+  {
+    vkDestroyRenderPass(g_PlatformState.Device, g_RenderState.CopyPass, nullptr);
+  });
+}
+
+internal void
+InitShadowRenderpass()
+{
+  VkAttachmentDescription depth_attachment = {};
+	// Depth attachment
+	depth_attachment.flags = 0;
+	depth_attachment.format = g_RenderState.DepthFormat;
+	depth_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+	depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	depth_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	depth_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	depth_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	depth_attachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+	VkAttachmentReference depth_attachment_ref = {};
+	depth_attachment_ref.attachment = 0;
+	depth_attachment_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+	//we are going to create 1 subpass, which is the minimum you can do
+	VkSubpassDescription subpass = {};
+	subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+
+	//hook the depth attachment into the subpass
+	subpass.pDepthStencilAttachment = &depth_attachment_ref;
+
+	//1 dependency, which is from "outside" into the subpass. And we can read or write color
+	VkSubpassDependency dependency = {};
+	dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+	dependency.dstSubpass = 0;
+	dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency.srcAccessMask = 0;
+	dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+	VkRenderPassCreateInfo render_pass_info = {};
+	render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+	//2 attachments from said array
+	render_pass_info.attachmentCount = 1;
+	render_pass_info.pAttachments = &depth_attachment;
+	render_pass_info.subpassCount = 1;
+	render_pass_info.pSubpasses = &subpass;
+
+  VK_CHECK(vkCreateRenderPass(g_PlatformState.Device, &render_pass_info, nullptr, &g_RenderState.ShadowPass));
+
+  g_RenderState.MainDeletionQueue.push_function([=]()
+  {
+    vkDestroyRenderPass(g_PlatformState.Device, g_RenderState.ShadowPass, nullptr);
+  });
+}
+
+internal void
+InitForwardRenderpass()
+{
+  VkAttachmentDescription color_attachment = {};
+	color_attachment.format = g_RenderState.SwapchainImageFormat;// _renderFormat;//_swachainImageFormat;
+	color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+	color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	color_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	color_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	color_attachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;//PRESENT_SRC_KHR;
+
+	VkAttachmentReference color_attachment_ref = {};
+	color_attachment_ref.attachment = 0;
+	color_attachment_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+	VkAttachmentDescription depth_attachment = {};
+	// Depth attachment
+	depth_attachment.flags = 0;
+	depth_attachment.format = g_RenderState.DepthFormat;
+	depth_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+	depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	depth_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	depth_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	depth_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	depth_attachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+	VkAttachmentReference depth_attachment_ref = {};
+	depth_attachment_ref.attachment = 1;
+	depth_attachment_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+	//we are going to create 1 subpass, which is the minimum you can do
+	VkSubpassDescription subpass = {};
+	subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+	subpass.colorAttachmentCount = 1;
+	subpass.pColorAttachments = &color_attachment_ref;
+	//hook the depth attachment into the subpass
+	subpass.pDepthStencilAttachment = &depth_attachment_ref;
+
+	//1 dependency, which is from "outside" into the subpass. And we can read or write color
+	VkSubpassDependency dependency = {};
+	dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+	dependency.dstSubpass = 0;
+	dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency.srcAccessMask = 0;
+	dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+
+	//array of 2 attachments, one for the color, and other for depth
+	VkAttachmentDescription attachments[2] = { color_attachment, depth_attachment };
+
+	VkRenderPassCreateInfo render_pass_info = {};
+	render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+	//2 attachments from said array
+	render_pass_info.attachmentCount = 2;
+	render_pass_info.pAttachments = &attachments[0];
+	render_pass_info.subpassCount = 1;
+	render_pass_info.pSubpasses = &subpass;
+	//render_pass_info.dependencyCount = 1;
+	//render_pass_info.pDependencies = &dependency;
+
+  VK_CHECK(vkCreateRenderPass(g_PlatformState.Device, &render_pass_info, nullptr, &g_RenderState.RenderPass));
+
+	g_RenderState.MainDeletionQueue.push_function([=]()
+  {
+    vkDestroyRenderPass(g_PlatformState.Device, g_RenderState.RenderPass, nullptr);
+	});
+}
+
+internal void
 InitFramebuffers()
 {
-  VkFramebufferCreateInfo fb_info = vk::init::framebuffer_create_info( g_RenderState.RenderPass, g_PlatformState.WindowExtent );
+  // VkFramebufferCreateInfo fb_info = vk::init::framebuffer_create_info( g_RenderState.RenderPass, g_PlatformState.WindowExtent );
 
-  const u64 framebufferSize = g_RenderState.SwapchainImages.size();
-  g_RenderState.Framebuffers.resize(framebufferSize);
+  // const u64 framebufferSize = g_RenderState.SwapchainImages.size();
+  // g_RenderState.Framebuffers.resize(framebufferSize);
   
-  for (u64 i = 0; i < framebufferSize; i++)
+  // for (u64 i = 0; i < framebufferSize; i++)
+  // {
+  //   VkImageView attachments[2];
+  //   attachments[0] = g_RenderState.SwapchainImageViews[i];
+  //   attachments[1] = g_RenderState.DepthImageView;
+
+  //   fb_info.pAttachments = attachments;
+  //   fb_info.attachmentCount = 2;
+
+  //   VK_CHECK(vkCreateFramebuffer(g_PlatformState.Device, &fb_info, nullptr, &g_RenderState.Framebuffers[i]));
+
+  //   g_RenderState.MainDeletionQueue.push_function([=]()
+  //   {
+  //     vkDestroyFramebuffer(g_PlatformState.Device, g_RenderState.Framebuffers[i], nullptr);
+  //     vkDestroyImageView(g_PlatformState.Device, g_RenderState.SwapchainImageViews[i], nullptr);
+  //   });
+  // }
+
+  const uint32_t swapchain_imagecount = static_cast<uint32_t>(g_RenderState.SwapchainImages.size());
+	g_RenderState.Framebuffers = std::vector<VkFramebuffer>(swapchain_imagecount);
+
+	//create the framebuffers for the swapchain images. This will connect the render-pass to the images for rendering
+	VkFramebufferCreateInfo fwd_info = vk::init::framebuffer_create_info(g_RenderState.RenderPass, g_PlatformState.WindowExtent);
+	VkImageView attachments[2];
+	attachments[0] = g_RenderState.RawRenderImage.DefaultView;
+	attachments[1] = g_RenderState.DepthImage.DefaultView;
+
+	fwd_info.pAttachments = attachments;
+	fwd_info.attachmentCount = 2;
+	VK_CHECK(vkCreateFramebuffer(g_PlatformState.Device, &fwd_info, nullptr, &g_RenderState.ForwardFramebuffer));
+
+	//create the framebuffer for shadow pass	
+	VkFramebufferCreateInfo sh_info = vk::init::framebuffer_create_info(g_RenderState.ShadowPass, g_RenderState.ShadowExtent);
+	sh_info.pAttachments = &g_RenderState.ShadowImage.DefaultView;
+	sh_info.attachmentCount = 1;
+	VK_CHECK(vkCreateFramebuffer(g_PlatformState.Device, &sh_info, nullptr, &g_RenderState.ShadowFramebuffer));
+	
+	for (uint32_t i = 0; i < swapchain_imagecount; i++)
   {
-    VkImageView attachments[2];
-    attachments[0] = g_RenderState.SwapchainImageViews[i];
-    attachments[1] = g_RenderState.DepthImageView;
+		VkFramebufferCreateInfo fb_info = vk::init::framebuffer_create_info(g_RenderState.CopyPass, g_PlatformState.WindowExtent);
+		fb_info.pAttachments = &g_RenderState.SwapchainImageViews[i];
+		fb_info.attachmentCount = 1;
+		VK_CHECK(vkCreateFramebuffer(g_PlatformState.Device, &fb_info, nullptr, &g_RenderState.Framebuffers[i]));
 
-    fb_info.pAttachments = attachments;
-    fb_info.attachmentCount = 2;
-
-    VK_CHECK(vkCreateFramebuffer(g_PlatformState.Device, &fb_info, nullptr, &g_RenderState.Framebuffers[i]));
-
-    g_RenderState.MainDeletionQueue.push_function([=]()
+		g_RenderState.MainDeletionQueue.push_function([=]()
     {
-      vkDestroyFramebuffer(g_PlatformState.Device, g_RenderState.Framebuffers[i], nullptr);
-      vkDestroyImageView(g_PlatformState.Device, g_RenderState.SwapchainImageViews[i], nullptr);
-    });
+			vkDestroyFramebuffer(g_PlatformState.Device, g_RenderState.Framebuffers[i], nullptr);
+			vkDestroyImageView(g_PlatformState.Device, g_RenderState.SwapchainImageViews[i], nullptr);
+		});
   }
 }
 
@@ -347,6 +666,57 @@ InitSyncStructures()
   {
     vkDestroyFence(g_PlatformState.Device, g_RenderState.UploadContext.UploadFence, nullptr);
   });
+}
+
+size_t
+pad_uniform_buffer_size(size_t originalSize)
+{
+	size_t minUboAlignment = g_PlatformState.GpuProperties.limits.minUniformBufferOffsetAlignment;
+	size_t alignedSize = originalSize;
+	if (minUboAlignment > 0)
+  {
+		alignedSize = (alignedSize + minUboAlignment - 1) & ~(minUboAlignment - 1);
+	}
+	return alignedSize;
+}
+
+internal void
+InitDescriptorsNew()
+{
+  g_RenderState.DescriptorAllocator = new vk::util::descriptor::allocator {};
+	g_RenderState.DescriptorAllocator->Device = g_PlatformState.Device;
+
+	g_RenderState.DescriptorLayoutCache = new vk::util::descriptor::cache {};
+	g_RenderState.DescriptorLayoutCache->Device = g_PlatformState.Device;
+
+
+	VkDescriptorSetLayoutBinding textureBind = vk::init::descriptorset_layout_binding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
+
+	VkDescriptorSetLayoutCreateInfo set3info = {};
+	set3info.bindingCount = 1;
+	set3info.flags = 0;
+	set3info.pNext = nullptr;
+	set3info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+	set3info.pBindings = &textureBind;
+
+	g_RenderState.SingleTextureSetLayout = g_RenderState.DescriptorLayoutCache->CreateDescriptorLayout(&set3info);
+
+
+	const size_t sceneParamBufferSize = FRAME_OVERLAP * pad_uniform_buffer_size(sizeof(GPUSceneData));
+
+
+	for (int i = 0; i < FRAME_OVERLAP; i++)
+	{
+		g_RenderState.Frames[i].DynamicDescriptorAllocator = new vk::util::descriptor::allocator {};
+		g_RenderState.Frames[i].DynamicDescriptorAllocator->Device = g_PlatformState.Device;
+
+		//1 megabyte of dynamic data buffer
+		auto dynamicDataBuffer = CreateBuffer(1000000, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_ONLY);
+		g_RenderState.Frames[i].DynamicData.init(g_Allocator, dynamicDataBuffer, (u32)g_PlatformState.GpuProperties.limits.minUniformBufferOffsetAlignment); 
+
+		//20 megabyte of debug output
+		g_RenderState.Frames[i].DebugOutputBuffer = CreateBuffer(200000000, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_TO_CPU);
+	}
 }
 
 internal void
@@ -462,7 +832,7 @@ InitDescriptors()
 }
 
 internal void
-DrawObjects(VkCommandBuffer cmd, RenderObject* first, u64 count)
+DrawObjects(VkCommandBuffer cmd, render_object* first, u64 count)
 {
   FrameData& currentFrame = g_RenderState.GetCurrentFrame();
 
@@ -506,7 +876,7 @@ DrawObjects(VkCommandBuffer cmd, RenderObject* first, u64 count)
 
   for (int i = 0; i < count; i++)
   {
-    RenderObject& object = first[i];
+    render_object& object = first[i];
     objectSSBO[i].ModelMatrix = object.TransformMatrix;
   }
 
@@ -517,7 +887,7 @@ DrawObjects(VkCommandBuffer cmd, RenderObject* first, u64 count)
 
   for (u64 i = 0; i < count; i++)
   {
-    RenderObject& object = first[i];
+    render_object& object = first[i];
 
     if (object.Material != lastMaterial)
     {
@@ -544,6 +914,7 @@ DrawObjects(VkCommandBuffer cmd, RenderObject* first, u64 count)
       vkCmdBindVertexBuffers(cmd, 0, 1, &object.Mesh->VertexBuffer.Buffer, &offset);
       lastMesh = object.Mesh;
     }
+    
     vkCmdDraw(cmd, (u32)object.Mesh->Vertices.size(), 1, 0, (u32)i);
   }
 }
@@ -654,6 +1025,43 @@ Draw()
   VK_CHECK(vkQueuePresentKHR(g_RenderState.GraphicsQueue, &presentInfo));
 
   g_RenderState.FrameNumber++;
+}
+
+internal std::vector<indirect_batch>
+CompactDraws(render_object* Objects, i32 Count)
+{
+  std::vector<indirect_batch> draws;
+
+  indirect_batch firstDraw;
+  firstDraw.Mesh = Objects[0].Mesh;
+  firstDraw.Material = Objects[0].Material;
+  firstDraw.First = 0;
+  firstDraw.Count = 1;
+
+  draws.push_back(firstDraw);
+
+  for(i32 i = 1; i < Count; i++)
+  {
+    bool sameMesh = Objects[i].Mesh == draws.back().Mesh;
+    bool sameMaterial = Objects[i].Material == draws.back().Material;
+
+    if (sameMesh && sameMaterial)
+    {
+      draws.back().Count++;
+    }
+    else
+    {
+      indirect_batch newDraw;
+      newDraw.Mesh = Objects[i].Mesh;
+      newDraw.Material = Objects[i].Material;
+      newDraw.First = i;
+      newDraw.Count = 1;
+
+      draws.push_back(newDraw);
+    }
+  }
+
+  return draws;
 }
 
 internal VkShaderModule
@@ -965,7 +1373,7 @@ LoadImages()
 internal void
 InitScene()
 {
-  RenderObject ship;
+  render_object ship;
   ship.Mesh = GetMesh("ship");
   ship.Material = GetMaterial("texturedmesh");
   ship.TransformMatrix = glm::mat4{ 1.0f };
@@ -1067,16 +1475,106 @@ InitImGui()
   });
 }
 
+internal vulkan_platform_state
+Win32InitVulkan(HWND WindowWin32, HINSTANCE InstanceWin32)
+{
+  g_PlatformState.Win32NativeWindow = WindowWin32;
+
+  vkb::InstanceBuilder builder;
+  auto inst_ret = builder.set_app_name("VulkanEngine")
+    .request_validation_layers(true)
+    .require_api_version(1,1,0)
+    .use_default_debug_messenger()
+    .set_debug_callback(debug_callback)
+    .build();
+
+  vkb::Instance vkb_inst = inst_ret.value();
+
+  VkSurfaceKHR Surface = VK_NULL_HANDLE;
+  {
+    VkWin32SurfaceCreateInfoKHR SurfaceCreateInfo = {};
+    SurfaceCreateInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+    SurfaceCreateInfo.pNext = nullptr;
+    SurfaceCreateInfo.flags = 0;
+    SurfaceCreateInfo.hinstance = InstanceWin32;
+    SurfaceCreateInfo.hwnd = WindowWin32;
+    VkResult Result = vkCreateWin32SurfaceKHR(vkb_inst.instance, &SurfaceCreateInfo, nullptr, &Surface);
+    Assert(Result == VK_SUCCESS);
+  }
+
+
+  vkb::PhysicalDeviceSelector selector { vkb_inst };
+  vkb::PhysicalDevice physicalDevice = selector
+    .set_minimum_version(1,1)
+    .set_surface(Surface)
+    .select()
+    .value();
+
+  vkb::DeviceBuilder deviceBuilder { physicalDevice };
+  vkb::Device vkbDevice = deviceBuilder.build().value();
+
+  VkSurfaceCapabilitiesKHR surfaceCapabilities;
+  vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice.physical_device, Surface, &surfaceCapabilities);
+  g_PlatformState.WindowExtent = surfaceCapabilities.currentExtent;
+
+  g_PlatformState.Device = vkbDevice.device;
+  g_PlatformState.ChosenGPU = physicalDevice.physical_device;
+  g_PlatformState.Instance = vkb_inst.instance;
+  g_PlatformState.Surface = Surface;
+  g_PlatformState.DebugMessenger = vkb_inst.debug_messenger;
+
+  g_RenderState.GraphicsQueue = vkbDevice.get_queue(vkb::QueueType::graphics).value();
+  g_RenderState.GraphicsQueueFamily = vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
+
+  VmaAllocatorCreateInfo allocatorInfo = {};
+  allocatorInfo.physicalDevice = g_PlatformState.ChosenGPU;
+  allocatorInfo.device = g_PlatformState.Device;
+  allocatorInfo.instance = g_PlatformState.Instance;
+  allocatorInfo.pAllocationCallbacks = g_VkAllocator;
+  vmaCreateAllocator(&allocatorInfo, &g_Allocator);
+
+  vkGetPhysicalDeviceProperties(g_PlatformState.ChosenGPU, &g_PlatformState.GpuProperties);
+
+  return g_PlatformState;
+}
+
 internal void
 Init()
 {
+  g_RenderState.Meshes.reserve(1000);
+
+  // shader cache
+
+  // render scene
+
   InitSwapchain();
+
+  // InitForwardRenderpass();
+  // InitCopyRenderpass();
+  // InitShadowRenderpass();
+  InitDefaultRenderpass();
+
+  // InitFrameBuffers
+  InitFramebuffers();
+
+  // InitCommands();
+  // InitSyncStructures();
+  // InitDescriptors();
+  // InitPipelines();
   InitCommands();
   InitSyncStructures();
-  InitDescriptors();
-  InitDefaultRenderpass();
-  InitFramebuffers();
+  //InitDescriptors();
+  InitDescriptorsNew();
   InitPipelines();
+
+  // InitCommands();
+  // InitSyncStructures();
+  // InitDescriptors();
+  // InitDefaultRenderpass();
+  // InitFramebuffers();
+  // InitPipelines();
+
+  //
 
   LoadImages();
   LoadMeshes();

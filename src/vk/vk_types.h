@@ -4,6 +4,21 @@
 #define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
 
+struct allocated_buffer_untyped
+{
+	VkBuffer Buffer{};
+	VmaAllocation Allocation{};
+	VkDeviceSize Size{0};
+	VkDescriptorBufferInfo get_info(VkDeviceSize offset = 0)
+  {
+    VkDescriptorBufferInfo info;
+	  info.buffer = Buffer;
+	  info.offset = offset;
+	  info.range = Size;
+	  return info;
+  }
+};
+
 struct allocated_buffer
 {
   VkBuffer Buffer;
@@ -29,6 +44,4 @@ VertexInputDescription
   VkPipelineVertexInputStateCreateFlags Flags = 0;
 };
 
-#include "vk_descriptors.h"
-
-#include "../mesh.h"
+// material

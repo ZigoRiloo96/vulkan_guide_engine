@@ -5,9 +5,13 @@
 
 #include "shared.h"
 
+#include "input.h"
+
 #include "vk/vk_renderer.cpp"
 
 #include "droper.h"
+
+#include "player_camera.h"
 
 static bool isRun;
 static bool DEBUGGlobalShowCursor = true;
@@ -71,11 +75,32 @@ WindowProc(
   case WM_ACTIVATEAPP:
   {} break;
 
-  case WM_SYSKEYDOWN:
-  case WM_SYSKEYUP:
+  //case WM_SYSKEYDOWN:
+  //case WM_SYSKEYUP:
+  //case WM_KEYUP:
   case WM_KEYDOWN:
-  case WM_KEYUP:
   {
+    switch (WParam)
+    {
+    case VK_LEFT:
+    {
+      g_Input.PushAction(input::LEFT);
+    } break;
+    case VK_RIGHT:
+    {
+      g_Input.PushAction(input::RIGHT);
+    } break;
+    case VK_UP:
+    {
+      g_Input.PushAction(input::UP);
+    } break;
+    case VK_DOWN:
+    {
+      g_Input.PushAction(input::DOWN);
+    } break;
+    default:
+      break;
+    }
   } break;
 
   default:
@@ -222,6 +247,7 @@ WinMain(HINSTANCE Instance,
 
     while(isRun)
     {
+      g_Input.PreUpdate();
       MSG Message;
       while(PeekMessage(&Message, 0, 0, 0, PM_REMOVE))
       {
@@ -232,6 +258,7 @@ WinMain(HINSTANCE Instance,
           isRun = false;
         }
       }
+      g_Input.PostUpdate();
 
       if (!isRun) break;
       

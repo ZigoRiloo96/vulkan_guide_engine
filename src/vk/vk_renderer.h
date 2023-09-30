@@ -1,6 +1,12 @@
 
 #include "vk_initializers.h"
 
+#include "vk_pushbuffer.h"
+#include "vk_descriptors.h"
+#include "vk_shaders.h"
+
+#include "../mesh.h"
+
 #define VK_CHECK(x)                                               \
   do                                                              \
   {                                                               \
@@ -60,13 +66,20 @@ upload_context
 };
 
 struct
-RenderObject
+render_object
 {
   Mesh* Mesh;
   Material* Material;
   glm::mat4 TransformMatrix;
 };
 
+struct indirect_batch
+{
+  Mesh* Mesh;
+  Material* Material;
+  u32 First;
+  u32 Count;
+};
 
 struct
 GPUCameraData
@@ -96,15 +109,27 @@ struct
 FrameData
 {
   VkSemaphore PresentSemaphore, RenderSemaphore;
-  VkFence RenderFence;  
+  VkFence RenderFence;
+
+  // DeletionQueue FrameDeletionQueue;
+
   VkCommandPool CommandPool;
   VkCommandBuffer MainCommandBuffer;
 
-  allocated_buffer CameraBuffer;
-  allocated_buffer ObjectBuffer;
+  vk::util::push_buffer DynamicData;
+
+  allocated_buffer_untyped DebugOutputBuffer;
+
+  vk::util::descriptor::allocator* DynamicDescriptorAllocator;
+
+  allocated_buffer_untyped CameraBuffer;
+  allocated_buffer_untyped ObjectBuffer;
 
   VkDescriptorSet ObjectDescriptor;
   VkDescriptorSet GlobalDescriptor;
+
+  std::vector<u32> DebugDataOffsets;
+	std::vector<std::string> DebugDataNames;
 };
 
 struct vulkan_platform_state
@@ -135,6 +160,8 @@ vulkan_render_state
   u32 GraphicsQueueFamily;
 
   VkRenderPass RenderPass;
+  VkRenderPass CopyPass;
+  VkRenderPass ShadowPass;
   std::vector<VkFramebuffer> Framebuffers;
 
   i32 FrameNumber = 0;
@@ -163,19 +190,42 @@ vulkan_render_state
   VkDescriptorSetLayout SingleTextureSetLayout;
   VkDescriptorPool DescriptorPool;
 
+  // render
+  allocated_image RawRenderImage;
+  VkSampler SmoothSampler;
+  VkFramebuffer ForwardFramebuffer;
+	VkFramebuffer ShadowFramebuffer;
+
   // Depth
   VkImageView DepthImageView;
   allocated_image DepthImage;
+  allocated_image DepthPyramid;
   VkFormat DepthFormat;
 
+  vk::util::descriptor::allocator* DescriptorAllocator;
+	vk::util::descriptor::cache* DescriptorLayoutCache;
+	// vkutil::VulkanProfiler* _profiler;
+	// vkutil::MaterialSystem* _materialSystem;
+
+  allocated_image ShadowImage;
+  VkSampler ShadowSampler;
+  VkExtent2D ShadowExtent{ 1024*4,1024*4 };
+	int DepthPyramidWidth ;
+	int DepthPyramidHeight;
+	int DepthPyramidLevels;
+
   // Renderables
-  std::vector<RenderObject> Renderables;
+  std::vector<render_object> Renderables;
   std::unordered_map<std::string, Material> Materials;
   std::unordered_map<std::string, Mesh> Meshes;
 
+  // samplers
+  VkSampler DepthSampler;
+	VkImageView DepthPyramidMips[16] = {};
+
   // Scene
   GPUSceneData SceneParameters;
-  allocated_buffer SceneParameterBuffer;
+  allocated_buffer_untyped SceneParameterBuffer;
 
   // Context
   upload_context UploadContext;
